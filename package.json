@@ -1,0 +1,35 @@
+{
+  "name": "linkedin-post-alerts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:integration": "tsx --test tests/integration/*.test.ts",
+    "migrate": "tsx scripts/migrate.ts",
+    "start:collector": "node --env-file=.env dist/services/collector/src/main.js",
+    "start:processor": "node --env-file=.env dist/services/processor/src/main.js",
+    "start:notifier": "node --env-file=.env dist/services/notifier/src/main.js",
+    "demo": "tsx scripts/demo.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pg": "^8.16.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "@types/pg": "^8.15.0",
+    "prettier": "^3.6.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
