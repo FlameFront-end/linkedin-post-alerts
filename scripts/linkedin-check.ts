@@ -7,14 +7,39 @@ try {
       process.env.LINKEDIN_CONFIG_FILE ?? '.local/linkedin.json',
     ),
   );
+  source.onPage = (page) =>
+    console.log(JSON.stringify({ event: 'page', ...page }));
   let count = 0;
-  for await (const page of source.fetchBatches()) count += page.length;
-  console.log(JSON.stringify({ status: 'ok', recentPosts: count }));
+  for await (const page of source.fetchBatches()) {
+    count += page.length;
+    for (const post of page.slice(0, 2))
+      console.log(
+        JSON.stringify({
+          event: 'sample',
+          textLength: post.text.length,
+          authorPresent: post.author !== 'LinkedIn author',
+          publishedAt: post.publishedAt,
+        }),
+      );
+  }
+  console.log(
+    JSON.stringify({
+      status: source.reports.every((r) => r.status === 'ok')
+        ? count
+          ? 'ok'
+          : 'empty'
+        : 'partial_or_failed',
+      recentPosts: count,
+      targets: source.reports,
+    }),
+  );
+  if (source.reports.some((r) => r.status !== 'ok')) process.exitCode = 1;
 } catch (error) {
   console.error(
     JSON.stringify({
       status: 'failed',
       code: error instanceof LinkedInError ? error.code : 'internal',
+      reason: error instanceof LinkedInError ? error.reason : undefined,
     }),
   );
   process.exitCode = 1;

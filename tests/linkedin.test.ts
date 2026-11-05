@@ -157,11 +157,14 @@ test('Source paginates with bounded pages; passes only fresh posts', async () =>
     const url = new URL(String(input));
     assert.equal(url.searchParams.get('profileUrn'), 'urn:li:fsd_profile:ABC');
     assert.equal(url.searchParams.get('start'), String(calls * 10));
+    if (calls > 0)
+      assert.equal(url.searchParams.get('paginationToken'), 'NEXT');
     calls++;
     return json({
       data: {
         elements: [fresh],
         paging: { start: (calls - 1) * 10, total: 100 },
+        metadata: { paginationToken: 'NEXT' },
       },
     });
   });
@@ -225,4 +228,86 @@ test('429 pauses subsequent polls without spending more HTTP requests', async ()
       error instanceof LinkedInError && error.code === 'cooldown',
   );
   assert.equal(calls, 1);
+});
+
+test('Bad first author does not starve a healthy author', async () => {
+  const settings = settingsSchema.parse({
+    sessionFile: 'x',
+    authorUrns: ['urn:li:fsd_profile:BAD', 'urn:li:fsd_profile:GOOD'],
+  });
+  let healthy = 0;
+  const source = new LinkedInSource({ ...settings, session }, async (input) => {
+    if (new URL(String(input)).searchParams.get('profileUrn')?.endsWith('BAD'))
+      return json({}, 404);
+    healthy++;
+    return json({ data: { elements: [], paging: { start: 0, total: 0 } } });
+  });
+  await source.fetchPosts();
+  await source.fetchPosts();
+  assert.equal(healthy, 2);
+  assert.equal(source.reports[0]?.status, 'http_error');
+});
+test('Media-only updates are skipped; repost preserves outer ID and original vacancy text', () => {
+  const media = {
+    updateMetadata: { urn },
+    actor: { name: { text: 'Reposter' } },
+  };
+  const mediaResult = decodePosts(
+    { data: { elements: [media], paging: { start: 0, total: 1 } } },
+    now,
+  );
+  assert.equal(mediaResult.skippedNoText, 1);
+  assert.equal(mediaResult.posts.length, 0);
+  const repost = {
+    ...media,
+    commentary: { text: { text: 'Помогите найти' } },
+    resharedUpdate: entry,
+  };
+  const result = decodePosts(
+    { data: { elements: [repost], paging: { start: 0, total: 1 } } },
+    now,
+  );
+  assert.equal(result.posts[0]?.text, 'Помогите найти\n\nИщем DevOps');
+  assert.equal(result.posts[0]?.author, 'Reposter');
+});
+test('No author pagination token means no speculative second request', async () => {
+  let calls = 0;
+  const settings = settingsSchema.parse({
+    sessionFile: 'x',
+    authorUrns: ['urn:li:fsd_profile:A'],
+  });
+  const source = new LinkedInSource({ ...settings, session }, async () => {
+    calls++;
+    return json({ data: { elements: [], paging: { start: 0, total: 0 } } });
+  });
+  await source.fetchPosts();
+  assert.equal(calls, 1);
+});
+
+test('Unsupported keyword target cannot halt author feeds', async () => {
+  let authors = 0;
+  const settings = settingsSchema.parse({
+    sessionFile: 'x',
+    authorUrns: ['urn:li:fsd_profile:A'],
+    keywords: ['DevOps'],
+    experimentalKeywordSearch: true,
+    searchPathTemplate:
+      '/voyager/api/search?q={keywords}&start={start}&count={count}',
+  });
+  const source = new LinkedInSource({ ...settings, session }, async (input) => {
+    if (new URL(String(input)).pathname.endsWith('/search'))
+      return json({
+        data: {
+          elements: [{ $type: 'FeedbackCard' }],
+          paging: { start: 0, total: 1 },
+        },
+      });
+    authors++;
+    return json({ data: { elements: [], paging: { start: 0, total: 0 } } });
+  });
+  await source.fetchPosts();
+  await source.fetchPosts();
+  assert.equal(authors, 2);
+  assert.equal(source.reports[1]?.status, 'disabled');
+  assert.equal(source.isReady(), true);
 });

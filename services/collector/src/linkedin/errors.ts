@@ -11,6 +11,7 @@ export class LinkedInError extends Error {
   constructor(
     readonly code: LinkedInErrorCode,
     readonly retryAfterSeconds = 60,
+    readonly reason?: string,
   ) {
     super(`LinkedIn: ${code}`);
   }

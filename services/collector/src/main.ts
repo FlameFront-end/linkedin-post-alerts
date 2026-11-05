@@ -32,6 +32,9 @@ await runService({
       });
       throw error;
     }
+    if (source instanceof LinkedInSource)
+      for (const report of source.reports)
+        log('collector', 'target_result', report);
     log('collector', 'poll_completed', { source: source.name, count });
   },
 });

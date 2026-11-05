@@ -34,6 +34,9 @@ export class LinkedInClient {
         redirect: 'manual',
         signal: combined,
         headers: {
+          ...(this.session.userAgent
+            ? { 'user-agent': this.session.userAgent }
+            : {}),
           cookie: `li_at=${this.session.liAt}; JSESSIONID=${this.session.jsessionId}`,
           'csrf-token':
             this.session.csrfToken ??

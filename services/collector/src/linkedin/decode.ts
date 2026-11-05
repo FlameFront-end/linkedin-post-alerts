@@ -21,7 +21,13 @@ function text(value: unknown): string {
 export function decodePosts(
   body: unknown,
   now = new Date(),
-): { posts: Post[]; count: number; total?: number } {
+): {
+  posts: Post[];
+  count: number;
+  total?: number;
+  paginationToken?: string;
+  skippedNoText: number;
+} {
   const root = object(body);
   const records = new Map<string, unknown>();
   if (Array.isArray(root.included))
@@ -69,6 +75,20 @@ export function decodePosts(
     throw new LinkedInError('response_format');
   const posts = new Map<string, Post>();
   let candidates = 0;
+  let skippedNoText = 0;
+  const resolveNode = (value: unknown) =>
+    object(typeof value === 'string' ? records.get(value) : value);
+  const contentOf = (node: ObjectValue, depth = 0): string => {
+    if (depth > 4) return '';
+    const own = text(object(node.commentary).text);
+    const reshared = resolveNode(
+      node.resharedUpdate ?? node['*resharedUpdate'],
+    );
+    const original = Object.keys(reshared).length
+      ? contentOf(reshared, depth + 1)
+      : '';
+    return [own, original].filter(Boolean).join('\n\n');
+  };
   const walk = (
     value: unknown,
     visited = new Set<string>(),
@@ -92,10 +112,20 @@ export function decodePosts(
       typeof urnValue === 'string'
         ? urnValue.match(/urn:li:activity:(\d+)/)?.[0]
         : undefined;
-    const commentary = object(node.commentary);
-    const content = text(commentary.text);
-    if (urn && content) {
+    const content = contentOf(node);
+    if (
+      urn &&
+      (node.updateMetadata ||
+        node.commentary ||
+        node.resharedUpdate ||
+        node['*resharedUpdate'] ||
+        String(node.$type).endsWith('UpdateV2'))
+    ) {
       candidates++;
+      if (!content.trim()) {
+        skippedNoText++;
+        return;
+      }
       const actor = object(node.actor ?? records.get(String(node['*actor'])));
       const published =
         typeof node.createdAt === 'number'
@@ -129,6 +159,10 @@ export function decodePosts(
   return {
     posts: [...posts.values()],
     count: elements.length,
+    skippedNoText,
+    ...(typeof object(current.metadata).paginationToken === 'string'
+      ? { paginationToken: object(current.metadata).paginationToken as string }
+      : {}),
     ...(typeof paging.total === 'number' ? { total: paging.total } : {}),
   };
 }
