@@ -1,5 +1,6 @@
 export interface Sender {
   send(text: string): Promise<void>;
+  isReady?(): boolean;
 }
 export class DeliveryError extends Error {
   constructor(
@@ -10,6 +11,10 @@ export class DeliveryError extends Error {
   }
 }
 export class TelegramSender implements Sender {
+  private blockedUntil = 0;
+  isReady() {
+    return Date.now() >= this.blockedUntil;
+  }
   constructor(
     private readonly token: string,
     private readonly chatId: string,
@@ -37,12 +42,19 @@ export class TelegramSender implements Sender {
       ok?: boolean;
       parameters?: { retry_after?: number };
     } | null;
+    const rawDelay = body?.parameters?.retry_after;
+    const delay =
+      typeof rawDelay === 'number' && Number.isFinite(rawDelay)
+        ? Math.max(1, Math.min(86400, Math.ceil(rawDelay)))
+        : undefined;
+    if (response.status === 429)
+      this.blockedUntil = Date.now() + (delay ?? 30) * 1000;
     if (!response.ok || body?.ok !== true) {
       throw new DeliveryError(
         response.status >= 400 &&
           response.status < 500 &&
           response.status !== 429,
-        body?.parameters?.retry_after,
+        delay,
       );
     }
   }

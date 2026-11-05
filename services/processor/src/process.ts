@@ -7,6 +7,7 @@ import {
   fail,
 } from '../../../packages/queue/src/index.js';
 import { transaction } from '../../../packages/runtime/src/db.js';
+import { log } from '../../../packages/runtime/src/logger.js';
 import { classify } from './classifier.js';
 
 export async function processNext(pool: pg.Pool): Promise<boolean> {
@@ -15,6 +16,7 @@ export async function processNext(pool: pg.Pool): Promise<boolean> {
   const parsed = postSchema.safeParse(job.payload);
   if (!parsed.success) {
     await fail(pool, job, { permanent: true });
+    log('processor', 'invalid_job', { jobId: job.id });
     return true;
   }
   try {
@@ -40,8 +42,13 @@ export async function processNext(pool: pg.Pool): Promise<boolean> {
         });
       await complete(db, job);
     });
+    log('processor', 'post_processed', {
+      jobId: job.id,
+      decision: decision.reason,
+    });
   } catch {
     await fail(pool, job);
+    log('processor', 'job_retry', { jobId: job.id, attempt: job.attempts });
   }
   return true;
 }

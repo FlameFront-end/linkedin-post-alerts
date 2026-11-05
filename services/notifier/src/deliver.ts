@@ -9,6 +9,7 @@ export async function deliverNext(
   sender: Sender,
   preferRussian: boolean,
 ) {
+  if (sender.isReady && !sender.isReady()) return false;
   const job = await claim(pool, 'notification');
   if (!job) return false;
   const parsed = notificationSchema.safeParse(job.payload);
