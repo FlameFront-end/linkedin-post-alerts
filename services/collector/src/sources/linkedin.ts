@@ -3,16 +3,13 @@ import type { Post } from '../../../../packages/contracts/src/index.js';
 import { LinkedInClient, checkedUrl } from '../linkedin/client.js';
 import { decodePosts } from '../linkedin/decode.js';
 import type { Settings, Session } from '../linkedin/settings.js';
+import { GlobalPostSearch } from '../linkedin/global-search.js';
 import { LinkedInError } from '../linkedin/errors.js';
 
-const encode = (value: string) =>
-  encodeURIComponent(value).replace(
-    /[!'()*]/g,
-    (v) => `%${v.charCodeAt(0).toString(16).toUpperCase()}`,
-  );
 export class LinkedInSource implements PostSource {
   readonly name = 'linkedin';
   private readonly client: LinkedInClient;
+  private readonly globalSearch: GlobalPostSearch;
   private disabled = new Set<number>();
   reports: {
     index: number;
@@ -39,7 +36,9 @@ export class LinkedInSource implements PostSource {
       settings.requestIntervalMs,
       request,
     );
+    this.globalSearch = new GlobalPostSearch(this.client, settings);
     if (settings.searchPathTemplate) checkedUrl(settings.searchPathTemplate);
+    checkedUrl(settings.postPathTemplate);
   }
   isReady() {
     return (
@@ -70,14 +69,12 @@ export class LinkedInSource implements PostSource {
       })),
       ...this.settings.keywords.map((keyword) => ({
         kind: 'keyword' as const,
-        path: (start: number, _token?: string) =>
-          this.settings
-            .searchPathTemplate!.replaceAll('{keywords}', encode(keyword))
-            .replaceAll('{start}', String(start))
-            .replaceAll('{count}', String(this.settings.pageSize)),
+        keyword,
       })),
     ];
     this.reports = [];
+    const seen = new Set<string>();
+    const globalSearch = this.globalSearch;
     for (const [index, target] of targets.entries()) {
       if (this.disabled.has(index)) {
         this.reports.push({
@@ -91,6 +88,38 @@ export class LinkedInSource implements PostSource {
       let token: string | undefined;
       let posts = 0;
       try {
+        if (target.kind === 'keyword') {
+          let detailFailures = 0;
+          for await (const batch of globalSearch.pages(
+            target.keyword,
+            seen,
+            signal,
+          )) {
+            const fresh = batch.posts.filter(
+              (post) =>
+                Date.parse(post.publishedAt) >=
+                Date.now() - this.settings.maxAgeHours * 3600000,
+            );
+            posts += fresh.length;
+            detailFailures += batch.failedDetails;
+            this.onPage?.({
+              index,
+              kind: target.kind,
+              elements: batch.discovered,
+              posts: batch.posts.length,
+              fresh: fresh.length,
+              skippedNoText: 0,
+            });
+            yield fresh;
+          }
+          this.reports.push({
+            index,
+            kind: target.kind,
+            status: detailFailures ? 'partial' : 'ok',
+            posts,
+          });
+          continue;
+        }
         for (let page = 0; page < this.settings.maxPages; page++) {
           signal?.throwIfAborted();
           const start = page * this.settings.pageSize;

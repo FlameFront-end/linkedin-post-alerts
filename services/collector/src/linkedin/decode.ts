@@ -107,15 +107,20 @@ export function decodePosts(
     }
     const node = object(value);
     const metadata = object(node.updateMetadata);
-    const urnValue = metadata.urn ?? node.urn ?? node.entityUrn;
+    const urnValue =
+      metadata.urn ??
+      object(node.metadata).backendUrn ??
+      node.urn ??
+      node.entityUrn;
     const urn =
       typeof urnValue === 'string'
-        ? urnValue.match(/urn:li:activity:(\d+)/)?.[0]
+        ? urnValue.match(/urn:li:(?:activity|ugcPost|share):(\d{10,25})/)?.[0]
         : undefined;
     const content = contentOf(node);
     if (
       urn &&
       (node.updateMetadata ||
+        object(node.metadata).backendUrn ||
         node.commentary ||
         node.resharedUpdate ||
         node['*resharedUpdate'] ||

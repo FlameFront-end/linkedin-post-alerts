@@ -1,9 +1,17 @@
 {
   "sessionFile": "session.json",
   "authorUrns": [],
-  "keywords": [],
+  "keywords": [
+    "frontend вакансия",
+    "React ищем",
+    "фронтенд",
+    "DevOps вакансия",
+    "DevOps ищем",
+    "SRE hiring"
+  ],
   "pageSize": 10,
   "maxPages": 2,
   "maxAgeHours": 24,
-  "requestIntervalMs": 2000
+  "requestIntervalMs": 2000,
+  "maxDetailsPerQuery": 20
 }

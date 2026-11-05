@@ -29,7 +29,13 @@ export const settingsSchema = z
       .default([]),
     keywords: z.array(z.string().min(1).max(300)).max(20).default([]),
     searchPathTemplate: z.string().max(8000).optional(),
-    experimentalKeywordSearch: z.boolean().default(false),
+    // Kept for backwards compatibility; global search now has its own decoder.
+    experimentalKeywordSearch: z.boolean().optional(),
+    postPathTemplate: z
+      .string()
+      .max(8000)
+      .default('/voyager/api/feed/updates/{urn}'),
+    maxDetailsPerQuery: z.number().int().min(1).max(100).default(20),
     pageSize: z.number().int().min(1).max(50).default(10),
     maxPages: z.number().int().min(1).max(10).default(2),
     maxAgeHours: z.number().min(1).max(168).default(24),
@@ -41,15 +47,19 @@ export const settingsSchema = z
         code: 'custom',
         message: 'At least one author or keyword is required',
       });
-    if (value.keywords.length && !value.experimentalKeywordSearch)
-      ctx.addIssue({
-        code: 'custom',
-        message: 'Keyword search is experimental; explicit opt-in required',
-      });
     if (value.keywords.length && !value.searchPathTemplate)
       ctx.addIssue({
         code: 'custom',
-        message: 'Keyword search requires a captured searchPathTemplate',
+        message:
+          'Global post search needs a current captured Posts request; see docs/GLOBAL_SEARCH.md',
+      });
+    if (
+      !value.postPathTemplate.includes('{urn}') &&
+      !value.postPathTemplate.includes('{slug}')
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Post request requires urn or slug placeholder',
       });
     if (
       value.searchPathTemplate &&
