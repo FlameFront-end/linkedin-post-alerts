@@ -182,3 +182,47 @@ test('Authentication failure halts future requests without another HTTP call', a
   await assert.rejects(source.fetchPosts());
   assert.equal(calls, 1);
 });
+
+test('Resolves collection references and rejects false empty results', () => {
+  assert.equal(
+    decodePosts(
+      {
+        data: { '*result': 'collection' },
+        included: [
+          {
+            entityUrn: 'collection',
+            elements: [entry],
+            paging: { start: 0, total: 1 },
+          },
+        ],
+      },
+      now,
+    ).posts.length,
+    1,
+  );
+  assert.throws(() =>
+    decodePosts(
+      { data: { elements: [], paging: { start: 0, total: 10 } } },
+      now,
+    ),
+  );
+});
+test('429 pauses subsequent polls without spending more HTTP requests', async () => {
+  let calls = 0;
+  const settings = settingsSchema.parse({
+    sessionFile: 'x',
+    authorUrns: ['urn:li:fsd_profile:ABC'],
+  });
+  const source = new LinkedInSource({ ...settings, session }, async () => {
+    calls++;
+    return json({}, 429, { 'retry-after': '120' });
+  });
+  await assert.rejects(source.fetchPosts());
+  assert.equal(source.isReady(), false);
+  await assert.rejects(
+    source.fetchPosts(),
+    (error: unknown) =>
+      error instanceof LinkedInError && error.code === 'cooldown',
+  );
+  assert.equal(calls, 1);
+});

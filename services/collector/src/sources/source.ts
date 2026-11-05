@@ -1,6 +1,7 @@
 import type { Post } from '../../../../packages/contracts/src/index.js';
 export interface PostSource {
   readonly name: string;
+  isReady?(): boolean;
   fetchPosts(signal?: AbortSignal): Promise<Post[]>;
   fetchBatches?(signal?: AbortSignal): AsyncIterable<Post[]>;
 }

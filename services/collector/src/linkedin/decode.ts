@@ -31,8 +31,19 @@ export function decodePosts(
         records.set(entry.entityUrn, value);
     }
   let collection: ObjectValue | undefined;
+  const sought = new Set<string>();
   const seek = (value: unknown, depth = 0): void => {
     if (collection || depth > 12) return;
+    if (typeof value === 'string' && records.has(value)) {
+      if (sought.has(value)) return;
+      sought.add(value);
+      seek(records.get(value), depth + 1);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) seek(item, depth + 1);
+      return;
+    }
     const node = object(value);
     if (
       (Array.isArray(node.elements) || Array.isArray(node['*elements'])) &&
@@ -49,6 +60,13 @@ export function decodePosts(
   const current = collection as ObjectValue;
   const elements = (current.elements ?? current['*elements']) as unknown[];
   const paging = object(current.paging);
+  if (
+    !elements.length &&
+    typeof paging.total === 'number' &&
+    typeof paging.start === 'number' &&
+    paging.total > paging.start
+  )
+    throw new LinkedInError('response_format');
   const posts = new Map<string, Post>();
   let candidates = 0;
   const walk = (
@@ -78,7 +96,7 @@ export function decodePosts(
     const content = text(commentary.text);
     if (urn && content) {
       candidates++;
-      const actor = object(node.actor);
+      const actor = object(node.actor ?? records.get(String(node['*actor'])));
       const published =
         typeof node.createdAt === 'number'
           ? node.createdAt

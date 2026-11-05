@@ -1,3 +1,10 @@
+# Актуализация
+
+HTTP-адаптер LinkedIn добавлен после первого каркаса. Живая проверка ожидает сессию.
+Следующий документ: `docs/LINKEDIN_ADAPTER.md`. Сомнения: `docs/OPEN_QUESTIONS.md`.
+
+Исторический итог каркаса ниже; пункт «LinkedIn не реализован» относится к первоначальному этапу.
+
 # Передача проекта: LinkedIn Post Alerts
 
 Проект: `/Users/artem/Development/fullstack/linkedin-post-alerts`.

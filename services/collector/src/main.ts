@@ -2,6 +2,7 @@ import { readConfig } from '../../../packages/runtime/src/config.js';
 import { createPool } from '../../../packages/runtime/src/db.js';
 import { runService } from '../../../packages/runtime/src/service.js';
 import { log } from '../../../packages/runtime/src/logger.js';
+import type { PostSource } from './sources/source.js';
 import { MockSource } from './sources/mock.js';
 import { LinkedInSource } from './sources/linkedin.js';
 import { loadSettings } from './linkedin/settings.js';
@@ -9,7 +10,7 @@ import { LinkedInError } from './linkedin/errors.js';
 import { collect } from './collect.js';
 
 const config = readConfig();
-const source =
+const source: PostSource =
   config.SOURCE_MODE === 'mock'
     ? new MockSource()
     : new LinkedInSource(await loadSettings(config.LINKEDIN_CONFIG_FILE));
@@ -20,6 +21,7 @@ await runService({
   port: config.COLLECTOR_PORT,
   intervalMs: config.POLL_INTERVAL_MS,
   pool,
+  readyCheck: () => source.isReady?.() ?? true,
   tick: async (signal) => {
     let count: number;
     try {

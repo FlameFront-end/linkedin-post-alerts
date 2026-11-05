@@ -26,6 +26,9 @@ export class LinkedInSource implements PostSource {
     );
     if (settings.searchPathTemplate) checkedUrl(settings.searchPathTemplate);
   }
+  isReady() {
+    return !this.halted && Date.now() >= this.pausedUntil;
+  }
   async *fetchBatches(signal?: AbortSignal): AsyncGenerator<Post[]> {
     if (this.halted) throw this.halted;
     if (Date.now() < this.pausedUntil) throw new LinkedInError('cooldown');
