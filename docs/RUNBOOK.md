@@ -70,3 +70,10 @@ TEST_DATABASE_URL=postgres://alerts:alerts@localhost:55432/alerts_test npm run t
 ```
 
 Тест пересоздаёт схемы `queue` и `processing` в тестовой базе.
+
+## Восстановление после ревью
+
+Добавлены healthchecks; unhealthy сам по себе не вызывает restart/оповещение.
+Telegram при ошибке токена/доступа останавливает sender и сохраняет backlog.
+После исправления настроек перезапустить notifier. Для старых dead jobs есть
+`npm run queue:replay -- notification ID` (preview), затем тот же вызов с `--apply`.
