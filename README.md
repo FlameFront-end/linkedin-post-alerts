@@ -1,6 +1,6 @@
 # LinkedIn Post Alerts
 
-Каркас сервиса уведомлений о вакансиях **в постах LinkedIn**.
+Сервис уведомлений о вакансиях **в постах LinkedIn**.
 TypeScript / Node.js 22 / Express 5 / PostgreSQL. Три отдельных процесса;
 общие контракты и инфраструктурные библиотеки, без платных сборщиков.
 
@@ -36,6 +36,7 @@ npm run start:notifier
 - `packages/queue`: долговечная очередь PostgreSQL с арендой задания.
 - `packages/runtime`: конфигурация, соединения, остановка, health endpoints.
 - `migrations`: версия схемы данных.
+- `docs/GLOBAL_SEARCH.md`: основной режим без списка авторов.
 - `docs/ARCHITECTURE.md`: границы и гарантии.
 - `docs/WORKLOG.md`: шаги и решения.
 - `docs/OPEN_QUESTIONS.md`: сомнения и ограничения.
@@ -49,6 +50,6 @@ npm run start:notifier
 
 ## Подключение аккаунтов
 
-Для mock не требуется. Для LinkedIn см. `docs/LINKEDIN_ADAPTER.md`: локальный файл сессии,
+Для mock не требуется. Для глобального поиска список рекрутеров не нужен: см. `docs/GLOBAL_SEARCH.md`. Для сессии см. `docs/LINKEDIN_ADAPTER.md`: локальный файл сессии,
 список авторов и/или текущий поисковый запрос. Без них реальный режим не запускается.
 Cookies, токены и содержимое постов не должны попадать в Git или обычные логи.
