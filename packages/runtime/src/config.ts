@@ -5,6 +5,7 @@ const schema = z
   .object({
     DATABASE_URL: z.string().min(1),
     SOURCE_MODE: z.enum(['mock', 'linkedin']).default('mock'),
+    LINKEDIN_CONFIG_FILE: z.string().min(1).default('.local/linkedin.json'),
     POLL_INTERVAL_MS: positiveInt.min(1000).default(180000),
     WORKER_INTERVAL_MS: positiveInt.min(100).default(1000),
     COLLECTOR_PORT: positiveInt.max(65535).default(3101),

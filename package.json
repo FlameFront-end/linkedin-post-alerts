@@ -17,7 +17,8 @@
     "start:notifier": "node --env-file=.env dist/services/notifier/src/main.js",
     "demo": "tsx scripts/demo.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "linkedin:check": "tsx scripts/linkedin-check.ts"
   },
   "dependencies": {
     "express": "^5.1.0",

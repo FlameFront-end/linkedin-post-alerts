@@ -1,0 +1,9 @@
+# Use together with compose.yaml. Credentials remain on the local host.
+services:
+  collector:
+    user: '${LOCAL_UID:?Set LOCAL_UID}:${LOCAL_GID:?Set LOCAL_GID}'
+    environment:
+      SOURCE_MODE: linkedin
+      LINKEDIN_CONFIG_FILE: /app/.local/linkedin.json
+    volumes:
+      - ./.local:/app/.local:ro

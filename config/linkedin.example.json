@@ -1,0 +1,9 @@
+{
+  "sessionFile": "session.json",
+  "authorUrns": [],
+  "keywords": [],
+  "pageSize": 10,
+  "maxPages": 2,
+  "maxAgeHours": 24,
+  "requestIntervalMs": 2000
+}
