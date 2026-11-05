@@ -28,13 +28,14 @@ test('Telegram honors rate-limit retry_after without leaking token', async () =>
     globalThis.fetch = original;
   }
 });
-test('Telegram rejects permanent client errors', async () => {
+test('Telegram access failure pauses sender instead of killing messages', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => new Response('{"ok":false}', { status: 403 });
   try {
     await assert.rejects(
       new TelegramSender('SECRET', '1').send('test'),
-      (error: unknown) => error instanceof DeliveryError && error.permanent,
+      (error: unknown) =>
+        error instanceof DeliveryError && error.blocked && !error.permanent,
     );
   } finally {
     globalThis.fetch = original;

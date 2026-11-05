@@ -66,3 +66,21 @@ export async function fail(
     [job.id, job.lock_token, options.permanent ?? false, delay],
   );
 }
+
+// Configuration failures do not consume the per-message delivery budget.
+export async function release(db: Database, job: Job) {
+  await db.query(
+    `UPDATE queue.jobs SET status='pending', attempts=GREATEST(0,attempts-1), available_at=now(),
+    lock_token=NULL, locked_until=NULL, last_error='delivery_blocked'
+    WHERE id=$1 AND lock_token=$2 AND status='running'`,
+    [job.id, job.lock_token],
+  );
+}
+export async function replayDead(db: Database, kind: JobKind, id: string) {
+  const result = await db.query(
+    `UPDATE queue.jobs SET status='pending', attempts=0, available_at=now(), completed_at=NULL,
+    lock_token=NULL, locked_until=NULL, last_error=NULL WHERE id=$1 AND kind=$2 AND status='dead'`,
+    [id, kind],
+  );
+  return result.rowCount === 1;
+}

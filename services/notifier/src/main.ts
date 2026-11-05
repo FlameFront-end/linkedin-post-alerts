@@ -19,6 +19,7 @@ await runService({
   port: config.NOTIFIER_PORT,
   intervalMs: config.WORKER_INTERVAL_MS,
   pool,
+  readyCheck: () => sender.isReady?.() ?? true,
   tick: async (signal) => {
     for (let i = 0; i < 25 && !signal.aborted; i++) {
       if (!(await deliverNext(pool, sender, config.PREFER_RUSSIAN))) break;

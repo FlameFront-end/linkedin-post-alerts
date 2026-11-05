@@ -39,13 +39,49 @@ services:
     <<: *app
     command: ['node', 'dist/services/collector/src/main.js']
     ports: ['127.0.0.1:3101:3101']
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          'fetch("http://127.0.0.1:3101/health/ready").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
   processor:
     <<: *app
     command: ['node', 'dist/services/processor/src/main.js']
     ports: ['127.0.0.1:3102:3102']
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          'fetch("http://127.0.0.1:3102/health/ready").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
   notifier:
     <<: *app
     command: ['node', 'dist/services/notifier/src/main.js']
     ports: ['127.0.0.1:3103:3103']
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          'fetch("http://127.0.0.1:3103/health/ready").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 volumes:
   postgres-data:

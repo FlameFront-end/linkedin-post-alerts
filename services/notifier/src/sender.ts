@@ -6,14 +6,16 @@ export class DeliveryError extends Error {
   constructor(
     readonly permanent: boolean,
     readonly retryAfterSeconds?: number,
+    readonly blocked = false,
   ) {
     super('Delivery failed');
   }
 }
 export class TelegramSender implements Sender {
   private blockedUntil = 0;
+  private configurationBlocked = false;
   isReady() {
-    return Date.now() >= this.blockedUntil;
+    return !this.configurationBlocked && Date.now() >= this.blockedUntil;
   }
   constructor(
     private readonly token: string,
@@ -41,6 +43,7 @@ export class TelegramSender implements Sender {
     const body = (await response.json().catch(() => null)) as {
       ok?: boolean;
       parameters?: { retry_after?: number };
+      description?: string;
     } | null;
     const rawDelay = body?.parameters?.retry_after;
     const delay =
@@ -50,12 +53,22 @@ export class TelegramSender implements Sender {
     if (response.status === 429)
       this.blockedUntil = Date.now() + (delay ?? 30) * 1000;
     if (!response.ok || body?.ok !== true) {
-      throw new DeliveryError(
-        response.status >= 400 &&
-          response.status < 500 &&
-          response.status !== 429,
-        delay,
-      );
+      const messageError =
+        response.status === 400 &&
+        typeof body?.description === 'string' &&
+        /message is too long|message text is empty|can't parse entities/i.test(
+          body.description,
+        );
+      if (
+        response.status === 404 ||
+        response.status === 401 ||
+        response.status === 403 ||
+        (response.status === 400 && !messageError)
+      ) {
+        this.configurationBlocked = true;
+        throw new DeliveryError(false, undefined, true);
+      }
+      throw new DeliveryError(messageError, delay);
     }
   }
 }

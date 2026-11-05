@@ -7,7 +7,9 @@ import {
   complete,
   enqueue,
   fail,
+  replayDead,
 } from '../../packages/queue/src/index.js';
+import { TelegramSender } from '../../services/notifier/src/sender.js';
 import { collect } from '../../services/collector/src/collect.js';
 import { MockSource } from '../../services/collector/src/sources/mock.js';
 import { processNext } from '../../services/processor/src/process.js';
@@ -123,6 +125,72 @@ test(
         await deliverNext(pool, { send: async () => {} }, true),
         true,
       );
+
+      // Misconfigured token must preserve the current job AND untouched backlog.
+      const payload = {
+        post: (await source.fetchPosts())[0],
+        roles: ['frontend'],
+        russian: true,
+      };
+      await enqueue(pool, 'notification', 'blocked-one', payload);
+      await enqueue(pool, 'notification', 'blocked-two', payload);
+      const originalFetch = globalThis.fetch;
+      let sends = 0;
+      const blocked = new TelegramSender('NOT_A_TOKEN', 'NOT_A_CHAT');
+      globalThis.fetch = async () => {
+        sends++;
+        return new Response('{"ok":false}', { status: 401 });
+      };
+      try {
+        assert.equal(await deliverNext(pool, blocked, true), false);
+        assert.equal(await deliverNext(pool, blocked, true), false);
+        assert.equal(sends, 1);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      const blockedRows = (
+        await pool.query(
+          "SELECT status, attempts FROM queue.jobs WHERE dedupe_key IN ('blocked-one','blocked-two')",
+        )
+      ).rows;
+      assert.ok(
+        blockedRows.every(
+          (row) => row.status === 'pending' && row.attempts === 0,
+        ),
+      );
+      while (await deliverNext(pool, { send: async () => {} }, true)) {}
+
+      // Acknowledgement transient failures retry only the DB operation, never send twice.
+      await pool.query(`CREATE SEQUENCE processing.ack_attempts;
+        CREATE FUNCTION processing.fail_ack_twice() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN IF NEW.status='done' AND OLD.dedupe_key='ack-test' AND nextval('processing.ack_attempts') <= 2
+          THEN RAISE EXCEPTION 'simulated unavailable acknowledgement'; END IF; RETURN NEW; END $$;
+        CREATE TRIGGER fail_ack BEFORE UPDATE ON queue.jobs FOR EACH ROW EXECUTE FUNCTION processing.fail_ack_twice()`);
+      await enqueue(pool, 'notification', 'ack-test', payload);
+      let ackSends = 0;
+      assert.equal(
+        await deliverNext(
+          pool,
+          {
+            send: async () => {
+              ackSends++;
+            },
+          },
+          true,
+        ),
+        true,
+      );
+      assert.equal(ackSends, 1);
+      assert.equal(
+        (
+          await pool.query(
+            "SELECT status FROM queue.jobs WHERE dedupe_key='ack-test'",
+          )
+        ).rows[0].status,
+        'done',
+      );
+      assert.equal(await replayDead(pool, 'post', first.id), true);
+      assert.equal(await replayDead(pool, 'post', first.id), false);
     } finally {
       await pool.end();
     }
