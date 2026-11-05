@@ -1,0 +1,51 @@
+name: linkedin-post-alerts
+x-app: &app
+  build: .
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 30s
+  environment: &environment
+    DATABASE_URL: postgres://alerts:alerts@postgres:5432/alerts
+    SOURCE_MODE: mock
+    TELEGRAM_MODE: dry-run
+    PREFER_RUSSIAN: ${PREFER_RUSSIAN:-true}
+    POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-180000}
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: alerts
+      POSTGRES_PASSWORD: alerts
+      POSTGRES_DB: alerts
+    ports: ['127.0.0.1:55432:5432']
+    volumes: ['postgres-data:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U alerts -d alerts']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: .
+    command: ['node', 'dist/scripts/migrate.js']
+    environment:
+      DATABASE_URL: postgres://alerts:alerts@postgres:5432/alerts
+    depends_on:
+      postgres:
+        condition: service_healthy
+  collector:
+    <<: *app
+    command: ['node', 'dist/services/collector/src/main.js']
+    ports: ['127.0.0.1:3101:3101']
+  processor:
+    <<: *app
+    command: ['node', 'dist/services/processor/src/main.js']
+    ports: ['127.0.0.1:3102:3102']
+  notifier:
+    <<: *app
+    command: ['node', 'dist/services/notifier/src/main.js']
+    ports: ['127.0.0.1:3103:3103']
+volumes:
+  postgres-data:

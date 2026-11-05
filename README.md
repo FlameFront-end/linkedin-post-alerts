@@ -12,12 +12,10 @@ TypeScript / Node.js 22 / Express 5 / PostgreSQL. Три отдельных пр
 npm ci
 cp .env.example .env
 docker compose up -d postgres
-npm run migrate -- --env-file=.env
+node --env-file=.env --import tsx scripts/migrate.ts
 npm run build
 ```
 
-Мигратор читает DATABASE_URL из окружения; для локального запуска используйте
-`node --env-file=.env --import tsx scripts/migrate.ts` (команда выше с npm не загружает .env).
 Далее в трёх терминалах:
 
 ```sh
