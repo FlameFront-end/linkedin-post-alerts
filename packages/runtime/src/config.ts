@@ -14,6 +14,8 @@ const schema = z
     TELEGRAM_MODE: z.enum(['dry-run', 'live']).default('dry-run'),
     TELEGRAM_BOT_TOKEN: z.string().default(''),
     TELEGRAM_CHAT_ID: z.string().default(''),
+    // Must exceed the longest LinkedIn maxAgeHours (7 days) so old posts are not re-sent.
+    RETENTION_DAYS: positiveInt.min(14).max(3650).default(30),
     PREFER_RUSSIAN: z
       .enum(['true', 'false'])
       .default('true')

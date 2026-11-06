@@ -22,18 +22,18 @@ try {
         }),
       );
   }
+  const failed = source.reports.filter(
+    (r) => !['ok', 'partial', 'budget', 'skipped'].includes(r.status),
+  );
   console.log(
     JSON.stringify({
-      status: source.reports.every((r) => r.status === 'ok')
-        ? count
-          ? 'ok'
-          : 'empty'
-        : 'partial_or_failed',
+      status: failed.length ? 'failed' : count ? 'ok' : 'empty',
       recentPosts: count,
+      requests: source.requestsUsed,
       targets: source.reports,
     }),
   );
-  if (source.reports.some((r) => r.status !== 'ok')) process.exitCode = 1;
+  if (failed.length) process.exitCode = 1;
 } catch (error) {
   console.error(
     JSON.stringify({

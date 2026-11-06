@@ -56,3 +56,26 @@ export function encodeValue(value: string) {
     (v) => `%${v.charCodeAt(0).toString(16).toUpperCase()}`,
   );
 }
+// A single LinkedIn post can be addressed by activity, ugcPost and share URNs.
+export function urnsOf(value: unknown): string[] {
+  const node = object(value);
+  const metadata = object(node.metadata);
+  const updateMetadata = object(node.updateMetadata);
+  const found = new Set<string>();
+  for (const candidate of [
+    updateMetadata.urn,
+    updateMetadata.shareUrn,
+    metadata.backendUrn,
+    metadata.shareUrn,
+    node.urn,
+    node.entityUrn,
+  ]) {
+    const urn = postUrn(candidate);
+    if (urn) found.add(urn);
+  }
+  return [...found];
+}
+// Activity URN is the stable key for deduplication and the activity-ID timestamp.
+export function preferredUrn(urns: string[]): string | undefined {
+  return urns.find((urn) => urn.startsWith('urn:li:activity:')) ?? urns[0];
+}

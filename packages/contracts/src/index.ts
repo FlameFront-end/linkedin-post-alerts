@@ -19,7 +19,7 @@ export const postSchema = z.object({
   firstSeenAt: z.iso.datetime(),
 });
 export type Post = z.infer<typeof postSchema>;
-export const roleSchema = z.enum(['frontend', 'devops']);
+export const roleSchema = z.enum(['frontend', 'fullstack', 'devops']);
 export type Role = z.infer<typeof roleSchema>;
 export const notificationSchema = z.object({
   post: postSchema,
@@ -27,4 +27,12 @@ export const notificationSchema = z.object({
   russian: z.boolean(),
 });
 export type Notification = z.infer<typeof notificationSchema>;
-export type JobKind = 'post' | 'notification';
+// Operational alerts for the owner (collection stopped, session expired, throttling).
+export const alertSchema = z.object({
+  source: z.enum(['collector']),
+  code: z.string().min(1).max(64),
+  message: z.string().min(1).max(1000),
+  at: z.iso.datetime(),
+});
+export type Alert = z.infer<typeof alertSchema>;
+export type JobKind = 'post' | 'notification' | 'alert';

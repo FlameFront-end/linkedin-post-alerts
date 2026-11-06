@@ -245,7 +245,7 @@ test('Bad first author does not starve a healthy author', async () => {
   await source.fetchPosts();
   await source.fetchPosts();
   assert.equal(healthy, 2);
-  assert.equal(source.reports[0]?.status, 'http_error');
+  assert.equal(source.reports.find((r) => r.index === 0)?.status, 'http_error');
 });
 test('Media-only updates are skipped; repost preserves outer ID and original vacancy text', () => {
   const media = {
@@ -308,6 +308,6 @@ test('Unsupported keyword target cannot halt author feeds', async () => {
   await source.fetchPosts();
   await source.fetchPosts();
   assert.equal(authors, 2);
-  assert.equal(source.reports[1]?.status, 'disabled');
+  assert.equal(source.reports.find((r) => r.index === 1)?.status, 'disabled');
   assert.equal(source.isReady(), true);
 });

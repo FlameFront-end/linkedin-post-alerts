@@ -161,3 +161,159 @@ test('Media-only detail does not disable a global query', () => {
     undefined,
   );
 });
+
+// --- Production hardening -------------------------------------------------
+const activityId = (offsetMs = 0) =>
+  (BigInt(Date.now() - offsetMs) << 22n).toString();
+function cardsPage(urns: string[], total = urns.length) {
+  return {
+    data: {
+      elements: [
+        { items: urns.map((_, i) => ({ item: { '*entityResult': `c${i}` } })) },
+      ],
+      paging: { start: 0, count: 10, total },
+    },
+    included: urns.map((value, i) => ({
+      entityUrn: `c${i}`,
+      $type: 'com.linkedin.voyager.dash.search.EntityResultViewModel',
+      navigationUrl: `https://www.linkedin.com/feed/update/${value}/`,
+    })),
+  };
+}
+function updateFor(backendUrn: string, extra: Record<string, unknown> = {}) {
+  return {
+    data: { data: { result: { '*elements': ['u'] } } },
+    included: [
+      {
+        entityUrn: 'u',
+        $type: 'com.linkedin.voyager.dash.feed.Update',
+        metadata: { backendUrn, ...extra },
+        commentary: { text: { text: 'Ищем DevOps инженера' } },
+        actor: { name: { text: 'Recruiter' } },
+      },
+    ],
+  };
+}
+const detailUrn = (input: unknown) =>
+  decodeURIComponent(new URL(String(input)).pathname.split('/').at(-1)!);
+
+test('ugcPost search card matches an activity detail; activity becomes the dedupe key', () => {
+  const activity = `urn:li:activity:${activityId()}`;
+  const ugc = `urn:li:ugcPost:${activityId(5)}`;
+  const ref = decodeSearch(cardsPage([ugc])).references[0]!;
+  // Matched explicitly through the second URN of the same post.
+  const byShare = decodeDetails(updateFor(activity, { shareUrn: ugc }), ref)!;
+  assert.equal(byShare.id, activity);
+  // Single top-level post without the card URN is still unambiguous.
+  const single = decodeDetails(updateFor(activity), ref)!;
+  assert.equal(single.id, activity);
+});
+
+test('One unreadable post marks the query partial instead of disabling it', async () => {
+  const a = `urn:li:activity:${activityId(1000)}`;
+  const b = `urn:li:activity:${activityId(2000)}`;
+  const config = settings();
+  config.maxPages = 1;
+  const source = new LinkedInSource({ ...config, session }, async (input) => {
+    if (new URL(String(input)).pathname.endsWith('/graphql'))
+      return response(cardsPage([a, b]));
+    return detailUrn(input) === a
+      ? response({ data: { unexpected: true } })
+      : response(updateFor(b));
+  });
+  const posts = await source.fetchPosts();
+  assert.deepEqual(
+    posts.map((post) => post.id),
+    [b],
+  );
+  assert.equal(source.reports[0]?.status, 'partial');
+  assert.equal(source.isReady(), true);
+});
+
+test('A post request that never decodes disables only that query', async () => {
+  const urns = [1, 2, 3, 4].map(
+    (n) => `urn:li:activity:${activityId(n * 1000)}`,
+  );
+  const config = settings();
+  config.maxPages = 1;
+  const source = new LinkedInSource({ ...config, session }, async (input) =>
+    new URL(String(input)).pathname.endsWith('/graphql')
+      ? response(cardsPage(urns))
+      : response({ data: { unexpected: true } }),
+  );
+  await source.fetchPosts();
+  assert.equal(source.reports[0]?.status, 'response_format');
+  await source.fetchPosts();
+  assert.equal(source.reports[0]?.status, 'disabled');
+  assert.equal(source.isReady(), false);
+});
+
+test('Posts already in the durable queue are not fetched again', async () => {
+  const a = `urn:li:activity:${activityId(1000)}`;
+  const b = `urn:li:activity:${activityId(2000)}`;
+  const config = settings();
+  config.maxPages = 1;
+  const fetched: string[] = [];
+  const source = new LinkedInSource(
+    { ...config, session },
+    async (input) => {
+      if (new URL(String(input)).pathname.endsWith('/graphql'))
+        return response(cardsPage([a, b]));
+      fetched.push(detailUrn(input));
+      return response(updateFor(detailUrn(input)));
+    },
+    async (candidates) => new Set(candidates.filter((value) => value === a)),
+  );
+  const posts = await source.fetchPosts();
+  assert.deepEqual(fetched, [b]);
+  assert.deepEqual(
+    posts.map((post) => post.id),
+    [b],
+  );
+});
+
+test('Request budget caps a cycle and rotates the starting query', async () => {
+  const config = settingsSchema.parse({
+    sessionFile: 'x',
+    keywords: ['one', 'two', 'three'],
+    searchPathTemplate:
+      '/voyager/api/graphql?keywords={keywords}&start={start}&count={count}',
+    maxRequestsPerCycle: 1,
+    requestIntervalMs: 1000,
+  });
+  const queried: string[] = [];
+  const source = new LinkedInSource({ ...config, session }, async (input) => {
+    queried.push(new URL(String(input)).searchParams.get('keywords')!);
+    return response({
+      data: { elements: [], paging: { start: 0, count: 10, total: 0 } },
+    });
+  });
+  await source.fetchPosts();
+  assert.deepEqual(
+    source.reports.map((r) => r.status),
+    ['ok', 'budget', 'skipped'],
+  );
+  assert.equal(source.isReady(), true);
+  await source.fetchPosts();
+  assert.deepEqual(queried, ['one', 'two']);
+});
+
+test('Owner alerts: expired session and fully failing collection', async () => {
+  const { alertFor } = await import('../services/collector/src/alerts.js');
+  const { LinkedInError } =
+    await import('../services/collector/src/linkedin/errors.js');
+  const config = settings();
+  config.maxPages = 1;
+  const source = new LinkedInSource({ ...config, session }, async () =>
+    response({
+      data: { elements: [{ $type: 'FeedbackCard' }], paging: { start: 0 } },
+    }),
+  );
+  assert.equal(
+    alertFor(source, new LinkedInError('auth_required'))?.code,
+    'auth_required',
+  );
+  assert.equal(alertFor(source), undefined);
+  await source.fetchPosts();
+  assert.equal(alertFor(source)?.code, 'collection_failing');
+});

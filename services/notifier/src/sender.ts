@@ -1,5 +1,5 @@
 export interface Sender {
-  send(text: string): Promise<void>;
+  send(text: string, parseMode?: 'HTML'): Promise<void>;
   isReady?(): boolean;
 }
 export class DeliveryError extends Error {
@@ -21,7 +21,7 @@ export class TelegramSender implements Sender {
     private readonly token: string,
     private readonly chatId: string,
   ) {}
-  async send(text: string) {
+  async send(text: string, parseMode?: 'HTML') {
     let response: Response;
     try {
       response = await fetch(
@@ -33,6 +33,7 @@ export class TelegramSender implements Sender {
           body: JSON.stringify({
             chat_id: this.chatId,
             text,
+            parse_mode: parseMode,
             link_preview_options: { is_disabled: true },
           }),
         },

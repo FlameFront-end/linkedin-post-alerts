@@ -55,6 +55,26 @@ test('Long text preserves the source link and stays below Telegram limit', async
   assert.ok(text.endsWith(post.url));
 });
 
+test('Telegram card escapes post text and labels the source link', async () => {
+  const post = (await new MockSource().fetchPosts())[0]!;
+  const text = formatNotification(
+    {
+      post: {
+        ...post,
+        text: 'Ищем <React> разработчика\n\nОпыт & условия\n#React #Работа',
+      },
+      roles: ['frontend'],
+      russian: true,
+    },
+    true,
+    true,
+  );
+  assert.match(text, /<b>Ищем &lt;React&gt; разработчика<\/b>/);
+  assert.match(text, /Опыт &amp; условия/);
+  assert.match(text, /Открыть пост в LinkedIn/);
+  assert.doesNotMatch(text, /#React/);
+});
+
 test('Rate limit pauses the sender before claiming another job', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () =>

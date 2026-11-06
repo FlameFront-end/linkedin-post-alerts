@@ -84,3 +84,16 @@ export async function replayDead(db: Database, kind: JobKind, id: string) {
   );
   return result.rowCount === 1;
 }
+// Completed jobs older than the collection window can no longer be re-collected,
+// so their dedupe keys are safe to drop. Dead jobs are kept for investigation.
+export async function purgeCompleted(db: Database, days: number) {
+  const jobs = await db.query(
+    `DELETE FROM queue.jobs WHERE status='done' AND completed_at < now() - make_interval(days => $1)`,
+    [days],
+  );
+  const posts = await db.query(
+    `DELETE FROM processing.posts WHERE processed_at < now() - make_interval(days => $1)`,
+    [days],
+  );
+  return { jobs: jobs.rowCount ?? 0, posts: posts.rowCount ?? 0 };
+}

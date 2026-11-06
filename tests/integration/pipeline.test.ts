@@ -1,14 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { createPool } from '../../packages/runtime/src/db.js';
 import {
   claim,
   complete,
   enqueue,
   fail,
+  purgeCompleted,
   replayDead,
 } from '../../packages/queue/src/index.js';
+import { raiseAlert } from '../../services/collector/src/alerts.js';
 import { TelegramSender } from '../../services/notifier/src/sender.js';
 import { collect } from '../../services/collector/src/collect.js';
 import { MockSource } from '../../services/collector/src/sources/mock.js';
@@ -30,12 +32,11 @@ test(
       await pool.query(
         'DROP SCHEMA IF EXISTS queue CASCADE; DROP SCHEMA IF EXISTS processing CASCADE',
       );
-      await pool.query(
-        await readFile(
-          new URL('../../migrations/001_initial.sql', import.meta.url),
-          'utf8',
-        ),
-      );
+      const migrations = new URL('../../migrations/', import.meta.url);
+      for (const name of (await readdir(migrations))
+        .filter((value) => value.endsWith('.sql'))
+        .sort())
+        await pool.query(await readFile(new URL(name, migrations), 'utf8'));
       const source = new MockSource();
       await collect(source, pool);
       await collect(source, pool);
@@ -191,6 +192,43 @@ test(
       );
       assert.equal(await replayDead(pool, 'post', first.id), true);
       assert.equal(await replayDead(pool, 'post', first.id), false);
+
+      // Owner alerts go before vacancies and are deduplicated per day.
+      await enqueue(pool, 'notification', 'order-vacancy', payload);
+      const draft = { code: 'auth_required', message: 'Сессия истекла' };
+      await raiseAlert(pool, draft, new Date('2026-11-06T10:00:00Z'));
+      await raiseAlert(pool, draft, new Date('2026-11-06T12:00:00Z'));
+      const delivered: string[] = [];
+      while (
+        await deliverNext(
+          pool,
+          {
+            send: async (text) => {
+              delivered.push(text);
+            },
+          },
+          true,
+        )
+      ) {
+        /* drain */
+      }
+      assert.equal(delivered.length, 2);
+      assert.ok(delivered[0]?.startsWith('⚠️'));
+
+      // Retention removes only completed jobs older than the window.
+      await pool.query(
+        "UPDATE queue.jobs SET completed_at=now()-interval '40 days' WHERE dedupe_key='order-vacancy'",
+      );
+      const removed = await purgeCompleted(pool, 30);
+      assert.equal(removed.jobs, 1);
+      assert.equal(
+        (
+          await pool.query(
+            "SELECT count(*)::int AS n FROM queue.jobs WHERE status='done'",
+          )
+        ).rows[0].n > 0,
+        true,
+      );
     } finally {
       await pool.end();
     }

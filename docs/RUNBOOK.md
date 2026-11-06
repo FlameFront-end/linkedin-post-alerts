@@ -77,3 +77,9 @@ TEST_DATABASE_URL=postgres://alerts:alerts@localhost:55432/alerts_test npm run t
 Telegram при ошибке токена/доступа останавливает sender и сохраняет backlog.
 После исправления настроек перезапустить notifier. Для старых dead jobs есть
 `npm run queue:replay -- notification ID` (preview), затем тот же вызов с `--apply`.
+
+## Прод-режим
+
+Запуск, оповещения ⚠️ и обслуживание сессии описаны в `PRODUCTION.md`.
+Оповещения хранятся в `queue.jobs` с `kind='alert'` и доставляются раньше вакансий.
+Processor раз в час удаляет `done`-задания и решения старше `RETENTION_DAYS` (не меньше 14).

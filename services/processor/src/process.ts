@@ -8,9 +8,12 @@ import {
 } from '../../../packages/queue/src/index.js';
 import { transaction } from '../../../packages/runtime/src/db.js';
 import { log } from '../../../packages/runtime/src/logger.js';
-import { classify } from './classifier.js';
+import { classify, vacancyRoles } from './classifier.js';
 
-export async function processNext(pool: pg.Pool): Promise<boolean> {
+export async function processNext(
+  pool: pg.Pool,
+  filterVacancies = false,
+): Promise<boolean> {
   const job = await claim(pool, 'post');
   if (!job) return false;
   const parsed = postSchema.safeParse(job.payload);
@@ -22,6 +25,7 @@ export async function processNext(pool: pg.Pool): Promise<boolean> {
   try {
     const post = parsed.data;
     const decision = classify(post.text);
+    const roles = filterVacancies ? vacancyRoles(decision) : decision.roles;
     await transaction(pool, async (db) => {
       await db.query(
         `INSERT INTO processing.posts(id,payload,roles,russian,decision) VALUES($1,$2,$3,$4,$5)
@@ -34,10 +38,10 @@ export async function processNext(pool: pg.Pool): Promise<boolean> {
           decision.reason,
         ],
       );
-      if (decision.roles.length)
+      if (roles.length)
         await enqueue(db, 'notification', post.id, {
           post,
-          roles: decision.roles,
+          roles,
           russian: decision.russian,
         });
       await complete(db, job);

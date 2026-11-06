@@ -1,19 +1,31 @@
+import { decodeFeedPage, feedContinuation } from '../linkedin/feed-pages.js';
+import { decodeSearchHtml } from '../linkedin/search-html.js';
 import type { PostSource } from './source.js';
 import type { Post } from '../../../../packages/contracts/src/index.js';
-import { LinkedInClient, checkedUrl } from '../linkedin/client.js';
+import {
+  LinkedInClient,
+  checkedUrl,
+  feedPagePath,
+} from '../linkedin/client.js';
 import { decodePosts } from '../linkedin/decode.js';
 import type { Settings, Session } from '../linkedin/settings.js';
-import { GlobalPostSearch } from '../linkedin/global-search.js';
+import {
+  GlobalPostSearch,
+  type KnownPosts,
+} from '../linkedin/global-search.js';
 import { LinkedInError } from '../linkedin/errors.js';
+
+const HEALTHY = new Set(['ok', 'partial', 'budget']);
 
 export class LinkedInSource implements PostSource {
   readonly name = 'linkedin';
   private readonly client: LinkedInClient;
   private readonly globalSearch: GlobalPostSearch;
   private disabled = new Set<number>();
+  private cycle = 0;
   reports: {
     index: number;
-    kind: 'author' | 'keyword';
+    kind: 'author' | 'keyword' | 'feed';
     status: string;
     posts: number;
   }[] = [];
@@ -24,29 +36,45 @@ export class LinkedInSource implements PostSource {
     posts: number;
     fresh: number;
     skippedNoText: number;
+    skippedKnown?: number;
   }) => void;
   private pausedUntil = 0;
   private halted: LinkedInError | undefined;
   constructor(
     private readonly settings: Settings & { session: Session },
     request: typeof fetch = fetch,
+    known?: KnownPosts,
   ) {
     this.client = new LinkedInClient(
       settings.session,
       settings.requestIntervalMs,
       request,
     );
-    this.globalSearch = new GlobalPostSearch(this.client, settings);
+    this.globalSearch = new GlobalPostSearch(this.client, settings, known);
     if (settings.searchPathTemplate) checkedUrl(settings.searchPathTemplate);
     checkedUrl(settings.postPathTemplate);
   }
   isReady() {
-    return (
-      !this.halted &&
-      Date.now() >= this.pausedUntil &&
-      (!this.reports.length ||
-        this.reports.some((report) => report.status === 'ok'))
+    return !this.halted && Date.now() >= this.pausedUntil && !this.failing();
+  }
+  /** Every attempted target failed: collection is effectively down. */
+  failing() {
+    const attempted = this.reports.filter(
+      (report) => report.status !== 'skipped',
     );
+    return (
+      attempted.length > 0 &&
+      attempted.every((report) => !HEALTHY.has(report.status))
+    );
+  }
+  get requestsUsed() {
+    return this.client.requestsUsed;
+  }
+  get haltedCode() {
+    return this.halted?.code;
+  }
+  get pausedUntilMs() {
+    return this.pausedUntil;
   }
   async *fetchBatches(signal?: AbortSignal): AsyncGenerator<Post[]> {
     if (this.halted) throw this.halted;
@@ -71,11 +99,33 @@ export class LinkedInSource implements PostSource {
         kind: 'keyword' as const,
         keyword,
       })),
+      ...(this.settings.personalFeed ? [{ kind: 'feed' as const }] : []),
     ];
     this.reports = [];
+    this.client.beginCycle(this.settings.maxRequestsPerCycle);
     const seen = new Set<string>();
     const globalSearch = this.globalSearch;
-    for (const [index, target] of targets.entries()) {
+    // Refresh the feed first, then rotate the remaining targets for fairness.
+    const indexed = targets.map((target, index) => [index, target] as const);
+    const feed = indexed.find(([, target]) => target.kind === 'feed');
+    const other = indexed.filter(([, target]) => target.kind !== 'feed');
+    const offset = other.length ? this.cycle++ % other.length : 0;
+    const order = [
+      ...(feed ? [feed] : []),
+      ...other.slice(offset),
+      ...other.slice(0, offset),
+    ];
+    let budgetSpent = false;
+    for (const [index, target] of order) {
+      if (budgetSpent) {
+        this.reports.push({
+          index,
+          kind: target.kind,
+          status: 'skipped',
+          posts: 0,
+        });
+        continue;
+      }
       if (this.disabled.has(index)) {
         this.reports.push({
           index,
@@ -88,6 +138,59 @@ export class LinkedInSource implements PostSource {
       let token: string | undefined;
       let posts = 0;
       try {
+        if (target.kind === 'feed') {
+          const html = await this.client.get(feedPagePath, signal);
+          if (typeof html !== 'string')
+            throw new LinkedInError('response_format');
+          let discovered = decodeSearchHtml(html, new Date(), 'feed');
+          let continuation = feedContinuation(html, true);
+          for (
+            let page = 0;
+            page <= this.settings.personalFeedLoadMore;
+            page++
+          ) {
+            const fresh = discovered.filter((post) => {
+              if (
+                seen.has(post.id) ||
+                Date.parse(post.publishedAt) <
+                  Date.now() - this.settings.maxAgeHours * 3600000
+              )
+                return false;
+              seen.add(post.id);
+              return true;
+            });
+            posts += fresh.length;
+            this.onPage?.({
+              index,
+              kind: 'feed',
+              elements: discovered.length,
+              posts: discovered.length,
+              fresh: fresh.length,
+              skippedNoText: 0,
+              skippedKnown: 0,
+            });
+            yield fresh;
+            if (!continuation || page === this.settings.personalFeedLoadMore)
+              break;
+            const response = await this.client.nextFeedPage(
+              continuation.body,
+              signal,
+            );
+            discovered = decodeFeedPage(response);
+            continuation = feedContinuation(
+              response,
+              false,
+              continuation.start,
+            );
+          }
+          this.reports.push({
+            index,
+            kind: 'feed',
+            status: 'ok',
+            posts,
+          });
+          continue;
+        }
         if (target.kind === 'keyword') {
           let detailFailures = 0;
           for await (const batch of globalSearch.pages(
@@ -109,6 +212,7 @@ export class LinkedInSource implements PostSource {
               posts: batch.posts.length,
               fresh: fresh.length,
               skippedNoText: 0,
+              skippedKnown: batch.skippedKnown,
             });
             yield fresh;
           }
@@ -155,9 +259,19 @@ export class LinkedInSource implements PostSource {
         }
         this.reports.push({ index, kind: target.kind, status: 'ok', posts });
       } catch (error) {
-        if (signal?.aborted) throw error;
-        const failure =
-          error instanceof LinkedInError ? error : new LinkedInError('network');
+        // Abort, database and programming errors are not target failures.
+        if (signal?.aborted || !(error instanceof LinkedInError)) throw error;
+        const failure = error;
+        if (failure.code === 'budget') {
+          budgetSpent = true;
+          this.reports.push({
+            index,
+            kind: target.kind,
+            status: 'budget',
+            posts,
+          });
+          continue;
+        }
         this.reports.push({
           index,
           kind: target.kind,
@@ -172,7 +286,8 @@ export class LinkedInSource implements PostSource {
           this.pausedUntil = Date.now() + failure.retryAfterSeconds * 1000;
           throw failure;
         }
-        if (failure.code === 'response_format') this.disabled.add(index);
+        if (failure.code === 'response_format' && target.kind !== 'feed')
+          this.disabled.add(index);
         // A malformed or unavailable target must not starve healthy targets.
       }
     }

@@ -1,0 +1,19 @@
+# Production overlay. Run together with the LinkedIn overlay:
+#   LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose \
+#     -f compose.yaml -f compose.linkedin.yaml -f compose.prod.yaml up --build -d
+# Secrets come from .env in this directory (never committed): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
+services:
+  collector:
+    environment:
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-900000}
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
+  processor:
+    environment:
+      SOURCE_MODE: linkedin
+      RETENTION_DAYS: ${RETENTION_DAYS:-30}
+  notifier:
+    environment:
+      SOURCE_MODE: linkedin
+      TELEGRAM_MODE: ${TELEGRAM_MODE:-live}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:?Set TELEGRAM_CHAT_ID in .env}

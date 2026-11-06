@@ -22,7 +22,15 @@ await runService({
   readyCheck: () => sender.isReady?.() ?? true,
   tick: async (signal) => {
     for (let i = 0; i < 25 && !signal.aborted; i++) {
-      if (!(await deliverNext(pool, sender, config.PREFER_RUSSIAN))) break;
+      if (
+        !(await deliverNext(
+          pool,
+          sender,
+          config.PREFER_RUSSIAN,
+          config.SOURCE_MODE === 'linkedin',
+        ))
+      )
+        break;
     }
   },
 });

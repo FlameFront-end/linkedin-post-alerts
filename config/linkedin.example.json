@@ -2,16 +2,31 @@
   "sessionFile": "session.json",
   "authorUrns": [],
   "keywords": [
+    "frontend",
+    "fullstack",
     "frontend вакансия",
-    "React ищем",
+    "фронтенд разработчик",
+    "React разработчик",
+    "Angular разработчик",
+    "fullstack вакансия",
+    "фуллстек разработчик",
+    "front-end",
     "фронтенд",
-    "DevOps вакансия",
-    "DevOps ищем",
-    "SRE hiring"
+    "full stack",
+    "full-stack",
+    "фулстек",
+    "фуллстек",
+    "React",
+    "Vue.js",
+    "Angular",
+    "Next.js",
+    "UI Engineer",
+    "веб-разработчик"
   ],
   "pageSize": 10,
-  "maxPages": 2,
+  "maxPages": 1,
   "maxAgeHours": 24,
-  "requestIntervalMs": 2000,
-  "maxDetailsPerQuery": 20
+  "requestIntervalMs": 3000,
+  "maxDetailsPerQuery": 8,
+  "maxRequestsPerCycle": 30
 }

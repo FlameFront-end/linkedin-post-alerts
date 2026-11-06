@@ -2,12 +2,14 @@ import { createPool } from '../packages/runtime/src/db.js';
 import { replayDead } from '../packages/queue/src/index.js';
 const [kind, id, flag] = process.argv.slice(2);
 if (
-  (kind !== 'post' && kind !== 'notification') ||
+  (kind !== 'post' && kind !== 'notification' && kind !== 'alert') ||
   !id ||
   !/^\d+$/.test(id) ||
   (flag && flag !== '--apply')
 )
-  throw new Error('Usage: queue:replay -- post|notification ID [--apply]');
+  throw new Error(
+    'Usage: queue:replay -- post|notification|alert ID [--apply]',
+  );
 if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL required');
 const pool = createPool(process.env.DATABASE_URL);
 try {

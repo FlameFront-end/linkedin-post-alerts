@@ -6,7 +6,8 @@ export type LinkedInErrorCode =
   | 'response_format'
   | 'response_too_large'
   | 'configuration'
-  | 'cooldown';
+  | 'cooldown'
+  | 'budget';
 export class LinkedInError extends Error {
   constructor(
     readonly code: LinkedInErrorCode,

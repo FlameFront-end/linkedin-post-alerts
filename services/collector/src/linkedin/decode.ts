@@ -3,6 +3,7 @@ import {
   type Post,
 } from '../../../../packages/contracts/src/index.js';
 import { LinkedInError } from './errors.js';
+import { preferredUrn, urnsOf } from './graph.js';
 type ObjectValue = Record<string, unknown>;
 function object(value: unknown): ObjectValue {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -106,16 +107,7 @@ export function decodePosts(
       return;
     }
     const node = object(value);
-    const metadata = object(node.updateMetadata);
-    const urnValue =
-      metadata.urn ??
-      object(node.metadata).backendUrn ??
-      node.urn ??
-      node.entityUrn;
-    const urn =
-      typeof urnValue === 'string'
-        ? urnValue.match(/urn:li:(?:activity|ugcPost|share):(\d{10,25})/)?.[0]
-        : undefined;
+    const urn = preferredUrn(urnsOf(node));
     const content = contentOf(node);
     if (
       urn &&

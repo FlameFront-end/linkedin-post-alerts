@@ -23,26 +23,33 @@ export type Session = z.infer<typeof sessionSchema>;
 export const settingsSchema = z
   .object({
     sessionFile: z.string().min(1),
+    personalFeed: z.boolean().default(false),
+    personalFeedLoadMore: z.number().int().min(0).max(20).default(2),
     authorUrns: z
       .array(z.string().regex(/^urn:li:fsd_profile:[A-Za-z0-9_-]+$/))
       .max(50)
       .default([]),
     keywords: z.array(z.string().min(1).max(300)).max(20).default([]),
     searchPathTemplate: z.string().max(8000).optional(),
-    // Kept for backwards compatibility; global search now has its own decoder.
+    // Obsolete: accepted so old local configs still load. Has no effect.
     experimentalKeywordSearch: z.boolean().optional(),
     postPathTemplate: z
       .string()
       .max(8000)
       .default('/voyager/api/feed/updates/{urn}'),
-    maxDetailsPerQuery: z.number().int().min(1).max(100).default(20),
+    maxDetailsPerQuery: z.number().int().min(1).max(100).default(8),
+    maxRequestsPerCycle: z.number().int().min(1).max(500).default(30),
     pageSize: z.number().int().min(1).max(50).default(10),
-    maxPages: z.number().int().min(1).max(10).default(2),
+    maxPages: z.number().int().min(1).max(10).default(1),
     maxAgeHours: z.number().min(1).max(168).default(24),
-    requestIntervalMs: z.number().int().min(1000).max(60000).default(2000),
+    requestIntervalMs: z.number().int().min(1000).max(60000).default(3000),
   })
   .superRefine((value, ctx) => {
-    if (!value.authorUrns.length && !value.keywords.length)
+    if (
+      !value.personalFeed &&
+      !value.authorUrns.length &&
+      !value.keywords.length
+    )
       ctx.addIssue({
         code: 'custom',
         message: 'At least one author or keyword is required',
@@ -63,9 +70,11 @@ export const settingsSchema = z
       });
     if (
       value.searchPathTemplate &&
-      !['{keywords}', '{start}', '{count}'].every((p) =>
-        value.searchPathTemplate!.includes(p),
-      )
+      !(
+        value.searchPathTemplate.startsWith('/search/results/content/?')
+          ? ['{keywords}']
+          : ['{keywords}', '{start}', '{count}']
+      ).every((p) => value.searchPathTemplate!.includes(p))
     )
       ctx.addIssue({ code: 'custom', message: 'Missing search placeholders' });
   });
