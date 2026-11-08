@@ -27,6 +27,8 @@ export const settingsSchema = z
     jobsIntervalMs: z.number().int().min(300000).max(86400000).default(900000),
     jobsMaxAgeHours: z.number().int().min(24).max(168).default(168),
     jobsDetailsPerQuery: z.number().int().min(1).max(3).default(3),
+    jobsMaxPages: z.number().int().min(1).max(5).default(2),
+    jobsRequestBudget: z.number().int().min(4).max(30).default(10),
     personalFeed: z.boolean().default(false),
     personalFeedLoadMore: z.number().int().min(0).max(20).default(2),
     authorUrns: z

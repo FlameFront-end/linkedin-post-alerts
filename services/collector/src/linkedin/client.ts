@@ -1,5 +1,6 @@
 import { load } from 'cheerio';
 import { feedPaginationPath } from './feed-pages.js';
+import { validPager, type Continuation } from './pagination.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Session } from './settings.js';
 import { LinkedInError } from './errors.js';
@@ -29,6 +30,29 @@ export function checkedUrl(path: string) {
     throw new LinkedInError('configuration');
   return url;
 }
+export class RequestGate {
+  private next = 0;
+  private blocked?: LinkedInError;
+  private pause = 0;
+  async wait(intervalMs: number, signal?: AbortSignal) {
+    if (this.blocked) throw this.blocked;
+    if (Date.now() < this.pause) throw new LinkedInError('cooldown');
+    const at = Math.max(Date.now(), this.next);
+    this.next = at + intervalMs;
+    if (at > Date.now())
+      await sleep(at - Date.now(), undefined, signal ? { signal } : undefined);
+    if (this.blocked) throw this.blocked;
+    if (Date.now() < this.pause) throw new LinkedInError('cooldown');
+  }
+  fail(error: LinkedInError) {
+    if (error.code === 'auth_required') this.blocked = error;
+    if (error.code === 'rate_limited')
+      this.pause = Math.max(
+        this.pause,
+        Date.now() + error.retryAfterSeconds * 1000,
+      );
+  }
+}
 export class LinkedInClient {
   private nextRequestAt = 0;
   private used = 0;
@@ -37,6 +61,7 @@ export class LinkedInClient {
     private readonly session: Session,
     private readonly intervalMs: number,
     private readonly request: typeof fetch = fetch,
+    private readonly gate?: RequestGate,
   ) {}
   // Hard cap of HTTP requests per collection cycle, independent of query settings.
   beginCycle(limit: number) {
@@ -58,6 +83,20 @@ export class LinkedInClient {
     if (typeof result !== 'string') throw new LinkedInError('response_format');
     return result;
   }
+  async nextPage(page: Continuation, signal?: AbortSignal): Promise<string> {
+    if (!validPager(page.pagerId)) throw new LinkedInError('configuration');
+    const result = await this.fetchResponse(
+      new URL(
+        '/flagship-web/rsc-action/actions/pagination?sduiid=' +
+          encodeURIComponent(page.pagerId),
+        'https://www.linkedin.com',
+      ),
+      signal,
+      page.body,
+    );
+    if (typeof result !== 'string') throw new LinkedInError('response_format');
+    return result;
+  }
   private async fetchResponse(
     url: URL,
     signal?: AbortSignal,
@@ -71,6 +110,7 @@ export class LinkedInClient {
     this.used++;
     const delay = Math.max(0, this.nextRequestAt - Date.now());
     if (delay) await sleep(delay, undefined, signal ? { signal } : undefined);
+    await this.gate?.wait(this.intervalMs, signal);
     const timeout = AbortSignal.timeout(15000);
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     this.nextRequestAt = Date.now() + this.intervalMs;
@@ -184,7 +224,10 @@ export class LinkedInClient {
         throw new LinkedInError('response_format');
       }
     } catch (error) {
-      if (error instanceof LinkedInError) throw error;
+      if (error instanceof LinkedInError) {
+        this.gate?.fail(error);
+        throw error;
+      }
       throw new LinkedInError('network');
     }
   }

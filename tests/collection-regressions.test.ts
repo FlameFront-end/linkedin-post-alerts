@@ -1,0 +1,151 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { LinkedInClient } from '../services/collector/src/linkedin/client.js';
+import { LinkedInJobsSource } from '../services/collector/src/linkedin/jobs.js';
+import { settingsSchema } from '../services/collector/src/linkedin/settings.js';
+import { GlobalPostSearch } from '../services/collector/src/linkedin/global-search.js';
+import { decodeSearchHtml } from '../services/collector/src/linkedin/search-html.js';
+import { decodeFeedPage } from '../services/collector/src/linkedin/feed-pages.js';
+import { continuation } from '../services/collector/src/linkedin/pagination.js';
+const session = { liAt: 'OFFLINE', jsessionId: 'OFFLINE' };
+const html = (value: string) =>
+  new Response(value, { headers: { 'content-type': 'text/html' } });
+const day = new Date().toISOString().slice(0, 10);
+const cards = (ids: number[]) =>
+  ids
+    .map(
+      (id) =>
+        `<li data-entity-urn="urn:li:jobPosting:${id}"><h3 class="base-search-card__title">Software Engineer</h3><h4 class="base-search-card__subtitle">Company</h4><time datetime="${day}"></time></li>`,
+    )
+    .join('');
+const detail =
+  '<div class="show-more-less-html__markup">Ищем frontend разработчика в нашу команду. Удаленная работа и интересные задачи.</div>';
+test('Unavailable first three Jobs cards no longer starve the fourth, including after restart', async () => {
+  let saved: unknown;
+  const state = {
+    load: async () => saved,
+    save: async (_key: string, value: unknown) => {
+      saved = value;
+    },
+  };
+  const requests: string[] = [];
+  const request: typeof fetch = async (value) => {
+    const url = new URL(String(value));
+    requests.push(url.pathname);
+    if (url.pathname.endsWith('/search'))
+      return html(cards([12345671, 12345672, 12345673, 12345674]));
+    return url.pathname.endsWith('12345674')
+      ? html(detail)
+      : new Response('', { status: 404 });
+  };
+  const settings = {
+    ...settingsSchema.parse({
+      sessionFile: 'offline',
+      jobsKeywords: ['frontend'],
+      jobsMaxPages: 1,
+    }),
+    jobsIntervalMs: 0,
+  };
+  assert.equal(
+    (
+      await new LinkedInJobsSource(
+        new LinkedInClient(session, 0, request),
+        settings,
+        undefined,
+        state,
+      ).fetchPosts()
+    ).length,
+    0,
+  );
+  const result = await new LinkedInJobsSource(
+    new LinkedInClient(session, 0, request),
+    settings,
+    undefined,
+    state,
+  ).fetchPosts();
+  assert.equal(result.length, 1);
+  assert.equal(requests.filter((path) => path.endsWith('12345671')).length, 1);
+});
+const id = (n = 0) => (BigInt(Date.now() - n * 1000) << 22n).toString();
+const card = (value: string, text: string) =>
+  `<div role="listitem" componentkey="update-card-focus-${value}-FeedType_FLAGSHIP_SEARCH"><a href="/in/recruiter/">Recruiter</a><div componentkey="translatable-commentary-shareId=${value}"><div data-testid="expandable-text-box">${text}</div></div></div>`;
+test('HTML search follows a same-host next-page link instead of returning after page one', async () => {
+  const first = id(),
+    second = id(1);
+  let requests = 0;
+  const config = settingsSchema.parse({
+    sessionFile: 'offline',
+    keywords: ['frontend'],
+    searchPathTemplate: '/search/results/content/?keywords={keywords}',
+    maxPages: 3,
+  });
+  const client = new LinkedInClient(session, 0, async () =>
+    html(
+      ++requests === 1
+        ? card(first, 'Ищем Frontend разработчика в команду') +
+            '<a rel="next" href="/search/results/content/?keywords=frontend&amp;page=2">Next</a>'
+        : card(second, 'Ищем React разработчика в команду'),
+    ),
+  );
+  const posts = [];
+  for await (const page of new GlobalPostSearch(client, config).pages(
+    'frontend',
+    new Set(),
+  ))
+    posts.push(...page.posts);
+  assert.equal(requests, 2);
+  assert.equal(posts.length, 2);
+});
+test('HTML repost keeps original vacancy text alongside the comment', () => {
+  const original = card(id(), 'Делюсь вакансией').replace(
+    '</div></div></div>',
+    '</div></div><div componentkey="translatable-commentary-shareId=' +
+      id(1) +
+      '"><div data-testid="expandable-text-box">Ищем Frontend разработчика в нашу команду</div></div></div>',
+  );
+  assert.match(decodeSearchHtml(original)[0]!.text, /Ищем Frontend/);
+});
+test('Stream references resolve and literal salary survives', () => {
+  const value = id();
+  const input =
+    'a:' +
+    JSON.stringify({
+      children: ['Ищем Frontend разработчика, зарплата ', '$3000', ' и ', '$b'],
+    }) +
+    '\nb:' +
+    JSON.stringify('удаленная работа') +
+    '\n0:' +
+    JSON.stringify({
+      componentKey: 'translatable-commentary-shareId=' + value,
+      textProps: '$a',
+    });
+  const posts = decodeFeedPage(input);
+  assert.equal(posts.length, 1);
+  assert.match(posts[0]!.text, /\$3000/);
+  assert.match(posts[0]!.text, /удаленная работа/);
+});
+test('Unknown streaming page fails visibly rather than looking like an empty feed', () =>
+  assert.throws(() => decodeFeedPage('0:{"newUnrecognizedShape":true}')));
+test('HTML pagination preserves escaped quotes in server tokens', () => {
+  const value = {
+    $type: 'proto.sdui.actions.requests.PaginationRequest',
+    pagerId: 'com.linkedin.sdui.pagers.feed.mainFeed',
+    requestedArguments: {
+      payload: {
+        startIndex: 10,
+        requestType: 'Pagination',
+        feedSortOrder: 'FeedSortOrder_RELEVANCE',
+        token: 'a"b',
+      },
+    },
+  };
+  const input =
+    '<script>self.__next_f.push(' +
+    JSON.stringify([1, JSON.stringify(value)]) +
+    ')</script>';
+  const page = continuation(input, true, 'feed');
+  assert.equal(
+    JSON.parse(page!.body).paginationRequest.requestedArguments.payload.token,
+    'a"b',
+  );
+});

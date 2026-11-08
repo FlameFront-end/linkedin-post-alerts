@@ -19,6 +19,8 @@ export const postSchema = z.object({
   text: z.string().min(1).max(100_000),
   author: z.string().min(1).max(500),
   publishedAt: z.iso.datetime(),
+  publishedPrecision: z.enum(['day', 'instant']).optional(),
+  textIncomplete: z.boolean().optional(),
   firstSeenAt: z.iso.datetime(),
 });
 export type Post = z.infer<typeof postSchema>;
@@ -28,6 +30,9 @@ export const notificationSchema = z.object({
   post: postSchema,
   roles: z.array(roleSchema).min(1),
   russian: z.boolean(),
+  vacancyId: z.uuid().optional(),
+  revision: z.string().optional(),
+  updated: z.boolean().optional(),
 });
 export type Notification = z.infer<typeof notificationSchema>;
 // Operational alerts for the owner (collection stopped, session expired, throttling).

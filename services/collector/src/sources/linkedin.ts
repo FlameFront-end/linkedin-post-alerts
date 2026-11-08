@@ -5,6 +5,7 @@ import type { Post } from '../../../../packages/contracts/src/index.js';
 import {
   LinkedInClient,
   checkedUrl,
+  RequestGate,
   feedPagePath,
 } from '../linkedin/client.js';
 import { decodePosts } from '../linkedin/decode.js';
@@ -15,7 +16,7 @@ import {
 } from '../linkedin/global-search.js';
 import { LinkedInError } from '../linkedin/errors.js';
 
-const HEALTHY = new Set(['ok', 'partial', 'budget']);
+const HEALTHY = new Set(['ok', 'partial']);
 
 export class LinkedInSource implements PostSource {
   readonly name = 'linkedin';
@@ -28,6 +29,7 @@ export class LinkedInSource implements PostSource {
     kind: 'author' | 'keyword' | 'feed';
     status: string;
     posts: number;
+    coverageLimited?: boolean;
   }[] = [];
   onPage?: (report: {
     index: number;
@@ -44,11 +46,13 @@ export class LinkedInSource implements PostSource {
     private readonly settings: Settings & { session: Session },
     request: typeof fetch = fetch,
     known?: KnownPosts,
+    gate?: RequestGate,
   ) {
     this.client = new LinkedInClient(
       settings.session,
       settings.requestIntervalMs,
       request,
+      gate,
     );
     this.globalSearch = new GlobalPostSearch(this.client, settings, known);
     if (settings.searchPathTemplate) checkedUrl(settings.searchPathTemplate);
@@ -109,13 +113,14 @@ export class LinkedInSource implements PostSource {
     const indexed = targets.map((target, index) => [index, target] as const);
     const feed = indexed.find(([, target]) => target.kind === 'feed');
     const other = indexed.filter(([, target]) => target.kind !== 'feed');
-    const offset = other.length ? this.cycle++ % other.length : 0;
+    const offset = other.length ? this.cycle % other.length : 0;
     const order = [
       ...(feed ? [feed] : []),
       ...other.slice(offset),
       ...other.slice(0, offset),
     ];
     let budgetSpent = false;
+    let attempted = 0;
     for (const [index, target] of order) {
       if (budgetSpent) {
         this.reports.push({
@@ -135,6 +140,7 @@ export class LinkedInSource implements PostSource {
         });
         continue;
       }
+      if (target.kind !== 'feed') attempted++;
       let token: string | undefined;
       let posts = 0;
       try {
@@ -172,10 +178,7 @@ export class LinkedInSource implements PostSource {
             yield fresh;
             if (!continuation || page === this.settings.personalFeedLoadMore)
               break;
-            const response = await this.client.nextFeedPage(
-              continuation.body,
-              signal,
-            );
+            const response = await this.client.nextPage(continuation, signal);
             discovered = decodeFeedPage(response);
             continuation = feedContinuation(
               response,
@@ -193,6 +196,7 @@ export class LinkedInSource implements PostSource {
         }
         if (target.kind === 'keyword') {
           let detailFailures = 0;
+          let coverageLimited = false;
           for await (const batch of globalSearch.pages(
             target.keyword,
             seen,
@@ -205,13 +209,14 @@ export class LinkedInSource implements PostSource {
             );
             posts += fresh.length;
             detailFailures += batch.failedDetails;
+            coverageLimited ||= batch.coverageLimited ?? false;
             this.onPage?.({
               index,
               kind: target.kind,
               elements: batch.discovered,
               posts: batch.posts.length,
               fresh: fresh.length,
-              skippedNoText: 0,
+              skippedNoText: batch.skippedNoText ?? 0,
               skippedKnown: batch.skippedKnown,
             });
             yield fresh;
@@ -221,6 +226,7 @@ export class LinkedInSource implements PostSource {
             kind: target.kind,
             status: detailFailures ? 'partial' : 'ok',
             posts,
+            coverageLimited,
           });
           continue;
         }
@@ -264,6 +270,7 @@ export class LinkedInSource implements PostSource {
         const failure = error;
         if (failure.code === 'budget') {
           budgetSpent = true;
+          if (target.kind !== 'feed') attempted--;
           this.reports.push({
             index,
             kind: target.kind,
@@ -291,6 +298,7 @@ export class LinkedInSource implements PostSource {
         // A malformed or unavailable target must not starve healthy targets.
       }
     }
+    this.cycle += Math.max(1, attempted);
   }
 
   async fetchPosts(signal?: AbortSignal): Promise<Post[]> {

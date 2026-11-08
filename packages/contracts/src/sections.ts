@@ -3,7 +3,7 @@ export interface VacancySection {
   title?: string;
 }
 const roleStart =
-  /^(?:(?:senior|middle|junior|lead|staff|principal|старший|ведущий|младший)\s+)?(?:front[ -]?end|full[ -]?stack|back[ -]?end|dev[ -]?ops|sre|react|vue|angular|фронт[еэ]нд|фулл?[ -]?ст[еэ]к|б[эе]кенд|девопс)\b/iu;
+  /^(?:(?:senior|middle|junior|lead|staff|principal|старший|ведущий|младший)\s+)?(?:front[ -]?end|full[ -]?stack|back[ -]?end|dev[ -]?ops|sre|react|vue|angular|фронт[еэ]нд|фулл?[ -]?ст[еэ]к|б[эе]кенд|девопс)(?=\s|[:—–-]|$)/iu;
 
 /** Split only explicit role headings, preserving shared introduction. */
 export function splitVacancies(text: string): VacancySection[] {
