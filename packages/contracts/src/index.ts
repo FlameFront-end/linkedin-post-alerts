@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { vacancyImageUrl } from './media.js';
 
 export const postSchema = z.object({
   id: z.string().min(1).max(200),
@@ -17,6 +18,15 @@ export const postSchema = z.object({
       );
     }, 'Expected HTTPS LinkedIn URL'),
   text: z.string().min(1).max(100_000),
+  imageUrls: z
+    .array(z.url().max(4000).refine(vacancyImageUrl))
+    .max(2)
+    .optional(),
+  ocrApplied: z.boolean().optional(),
+  sourceFingerprint: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .optional(),
   author: z.string().min(1).max(500),
   publishedAt: z.iso.datetime(),
   publishedPrecision: z.enum(['day', 'instant']).optional(),

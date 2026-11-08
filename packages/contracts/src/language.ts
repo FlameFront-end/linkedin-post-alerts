@@ -25,10 +25,19 @@ export function assessLanguage(text: string): LanguageAssessment {
   }
   const clauses = text
     .normalize('NFKC')
-    .split(/[\n.!?;]+|,\s*(?=(?:english|russian|английский|русский)\b)/i);
+    .split(
+      /[\n.!?;]+|,\s*(?=(?:english|russian|german|french|spanish|polish|ukrainian|английский|русский)(?=\W|$))/i,
+    );
   for (const original of clauses) {
     const clause = original.toLowerCase().replace(/[’‘]/g, "'");
     if (!/\brussian\b|русск(?:ий|ого|им|ом|ому)|русскоязычн/u.test(clause))
+      continue;
+    if (
+      /russian(?:[- ]speaking)?\s+(?:company|office|market|team|community)\b/.test(
+        clause,
+      ) &&
+      !/fluent|fluency|proficien|language|speak\s+russian/.test(clause)
+    )
       continue;
     const negative =
       /\b(?:not|never)\s+(?:strictly\s+)?(?:required|necessary|mandatory|essential)|\bnot\s+(?:a\s+)?(?:requirement|must)|\b(?:do(?:es)?\s+not|don'?t|doesn'?t|no\s+need\s+to)\s+(?:\w+\s+){0,6}(?:require|need|speak|know)|\bwithout\s+(?:\w+\s+){0,3}russian|\bno\s+russian|\b(?:optional|preferred|advantage|bonus|plus|desirable|beneficial)\b|nice[- ]to[- ]have|would be nice|russian\s+(?:or|and\/or)\s+\w+|\w+\s+or\s+russian|не\s+(?:обязател|требует|нуж)|желательн|будет\s+плюсом/u;

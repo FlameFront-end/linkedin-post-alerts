@@ -39,6 +39,27 @@ export function streamText(input: string, html: boolean): string {
     if (Array.isArray(value) && typeof value[1] === 'string')
       decoded.push(value[1]);
   }
+  let layer = input;
+  for (let depth = 0; depth < 3; depth++) {
+    const extracted: string[] = [];
+    for (const match of layer.matchAll(/"(?:\\.|[^"\\])*"/g)) {
+      if (
+        !match[0].includes('PaginationRequest') &&
+        !match[0].includes('translatable-commentary')
+      )
+        continue;
+      try {
+        const value: unknown = JSON.parse(match[0]);
+        if (typeof value === 'string' && value !== match[0])
+          extracted.push(value);
+      } catch {
+        /* A JavaScript literal that is not JSON is not interpreted. */
+      }
+    }
+    if (!extracted.length) break;
+    layer = extracted.join('\n');
+    decoded.push(layer);
+  }
   return decoded.join('\n');
 }
 export function streamRecords(input: string): Map<string, unknown> {

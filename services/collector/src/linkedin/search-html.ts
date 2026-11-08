@@ -1,4 +1,6 @@
 import { load } from 'cheerio';
+import { vacancyImageUrl } from '../../../../packages/contracts/src/media.js';
+import { commentaryUrn, publishedFromUrn } from './post-identity.js';
 import {
   postSchema,
   type Post,
@@ -35,10 +37,21 @@ export function decodeHtmlPage(
   cards.each((_, card) => {
     const contents = $(card).find('[componentkey^="translatable-commentary"]');
     const firstKey = contents.first().attr('componentkey') ?? '';
-    const share = firstKey.match(/shareId=(\d{10,25})/)?.[1];
-    const ugc = firstKey.match(/ugcPostId=(\d{10,25})/)?.[1];
-    const id = share ?? ugc;
-    if (!id) {
+    const imageUrls = [
+      ...new Set(
+        $(card)
+          .find('img')
+          .map((_, img) => $(img).attr('src') ?? '')
+          .get()
+          .filter(vacancyImageUrl),
+      ),
+    ].slice(0, 2);
+    const linkedUrn = $(card)
+      .html()
+      ?.match(/urn:li:(?:activity|share|ugcPost):\d{10,25}/)?.[0];
+    const urn =
+      commentaryUrn(firstKey) ?? (imageUrls.length ? linkedUrn : undefined);
+    if (!urn) {
       skippedNoText++;
       return;
     }
@@ -59,15 +72,15 @@ export function decodeHtmlPage(
       const text = commentary.text().trim();
       if (text) texts.add(text);
     });
-    const text = [...texts].join('\n\n');
+    const text =
+      [...texts].join('\n\n') ||
+      (imageUrls.length ? '[Текст вакансии на изображении]' : '');
     if (!text) {
       skippedNoText++;
       return;
     }
-    const urn = `urn:li:${share ? 'share' : 'ugcPost'}:${id}`;
-    const published = Number(BigInt(id) >> 22n);
-    if (published < Date.UTC(2010, 0, 1) || published > now.getTime() + 60000)
-      return;
+    const published = publishedFromUrn(urn, now);
+    if (!published) return;
     const author = $(card)
       .find('a[href*="/in/"], a[href*="/company/"]')
       .map((_, a) => $(a).text().trim())
@@ -77,14 +90,15 @@ export function decodeHtmlPage(
       id: urn,
       url: `https://www.linkedin.com/feed/update/${urn}/`,
       text,
+      ...(imageUrls.length ? { imageUrls } : {}),
       author: author || 'LinkedIn author',
-      publishedAt: new Date(published).toISOString(),
+      publishedAt: published,
       firstSeenAt: now.toISOString(),
       ...(incomplete ? { textIncomplete: true } : {}),
     });
     if (post.success) posts.push(post.data);
   });
-  if (!recognized)
+  if (!recognized && $('[componentkey^="translatable-commentary"]').length)
     throw new LinkedInError('response_format', 60, 'html_unrecognized_cards');
   return { posts, cards: cards.length, skippedNoText };
 }

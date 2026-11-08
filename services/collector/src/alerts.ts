@@ -1,5 +1,4 @@
 import { alertSchema } from '../../../packages/contracts/src/index.js';
-import { enqueue } from '../../../packages/queue/src/index.js';
 import type { Database } from '../../../packages/runtime/src/db.js';
 import { LinkedInError } from './linkedin/errors.js';
 import type { LinkedInSource } from './sources/linkedin.js';
@@ -55,10 +54,13 @@ export async function raiseAlert(
     message: draft.message,
     at: now.toISOString(),
   });
-  await enqueue(
-    db,
-    'alert',
-    `collector:${draft.code}:${now.toISOString().slice(0, 10)}`,
-    alert,
+  await db.query(
+    `INSERT INTO queue.jobs(kind,dedupe_key,payload) VALUES('alert',$1,$2)
+    ON CONFLICT(kind,dedupe_key) DO UPDATE SET payload=excluded.payload
+    WHERE queue.jobs.status='pending'`,
+    [
+      `collector:${draft.code}:${now.toISOString().slice(0, 10)}`,
+      JSON.stringify(alert),
+    ],
   );
 }

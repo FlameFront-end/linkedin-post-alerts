@@ -101,14 +101,14 @@ function classifySection(
   )
     return result('no_hiring');
   // A clear role in the title or recruiting sentence outranks incidental team mentions.
+  const sentences = value.split(/[\n.!?]/);
   const lead =
     title ??
-    value
-      .split(/[\n.!?]/)
-      .find((line) =>
-        /ищем|требуется|нанимаем|ищу|hiring|looking|ваканси/u.test(line),
-      ) ??
-    value.split('\n')[0]!;
+    sentences.find((line) =>
+      /ищем|требуется|нанимаем|ищу|hiring|looking/u.test(line),
+    ) ??
+    sentences.find((line) => /ваканси/u.test(line)) ??
+    sentences[0]!;
   const primary = detectRoles(lead);
   if (!primary.length && (backend.test(lead) || infrastructure.test(lead)))
     return result('no_role');
@@ -167,19 +167,25 @@ export function vacancyRoles(decision: Classification): Role[] {
     : [];
 }
 /** Keep each role's requirements and closure state scoped to that vacancy. */
-export function vacancyCandidates(
+export function assessedCandidates(
   post: Post,
 ): { post: Post; decision: Classification }[] {
   const sections =
     post.kind === 'job' ? [{ text: post.text }] : splitVacancies(post.text);
-  return sections
-    .map((section) => {
-      const candidate: Post = {
-        ...post,
-        text: section.text,
-        ...(section.title ? { title: section.title } : {}),
-      };
-      return { post: candidate, decision: classifyPost(candidate) };
-    })
-    .filter((candidate) => vacancyRoles(candidate.decision).length > 0);
+  return sections.map((section) => {
+    const candidate: Post = {
+      ...post,
+      text: section.text,
+      ...(section.title ? { title: section.title } : {}),
+    };
+    return { post: candidate, decision: classifyPost(candidate) };
+  });
+}
+
+export function vacancyCandidates(
+  post: Post,
+): { post: Post; decision: Classification }[] {
+  return assessedCandidates(post).filter(
+    (candidate) => vacancyRoles(candidate.decision).length > 0,
+  );
 }

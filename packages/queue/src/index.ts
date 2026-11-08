@@ -14,10 +14,11 @@ export async function enqueue(
   key: string,
   payload: unknown,
 ) {
-  await db.query(
-    `INSERT INTO queue.jobs(kind,dedupe_key,payload) VALUES($1,$2,$3) ON CONFLICT(kind,dedupe_key) DO NOTHING`,
+  const result = await db.query(
+    `INSERT INTO queue.jobs(kind,dedupe_key,payload) VALUES($1,$2,$3) ON CONFLICT(kind,dedupe_key) DO NOTHING RETURNING id`,
     [kind, key, JSON.stringify(payload)],
   );
+  return result.rowCount === 1;
 }
 export async function claim(
   db: Database,
@@ -93,6 +94,14 @@ export async function purgeCompleted(db: Database, days: number) {
   );
   const posts = await db.query(
     `DELETE FROM processing.posts WHERE processed_at < now() - make_interval(days => $1)`,
+    [days],
+  );
+  await db.query(
+    'DELETE FROM processing.observations WHERE last_seen_at < now()-make_interval(days => $1)',
+    [days],
+  );
+  await db.query(
+    `DELETE FROM processing.vacancies v WHERE last_seen_at < now()-make_interval(days => $1) AND NOT EXISTS (SELECT 1 FROM queue.jobs j WHERE j.kind='notification' AND j.status IN ('pending','running') AND j.payload->>'vacancyId'=v.id::text)`,
     [days],
   );
   return { jobs: jobs.rowCount ?? 0, posts: posts.rowCount ?? 0 };

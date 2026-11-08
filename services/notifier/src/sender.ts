@@ -14,6 +14,14 @@ export class DeliveryError extends Error {
 export class TelegramSender implements Sender {
   private blockedUntil = 0;
   private configurationBlocked = false;
+  private failures = 0;
+  private pause(seconds?: number) {
+    const delay =
+      seconds ?? Math.min(900, 30 * 2 ** Math.min(this.failures, 5));
+    this.failures++;
+    this.blockedUntil = Date.now() + delay * 1000;
+    return delay;
+  }
   isReady() {
     return !this.configurationBlocked && Date.now() >= this.blockedUntil;
   }
@@ -39,7 +47,7 @@ export class TelegramSender implements Sender {
         },
       );
     } catch {
-      throw new DeliveryError(false);
+      throw new DeliveryError(false, this.pause(), true);
     }
     const body = (await response.json().catch(() => null)) as {
       ok?: boolean;
@@ -52,7 +60,7 @@ export class TelegramSender implements Sender {
         ? Math.max(1, Math.min(86400, Math.ceil(rawDelay)))
         : undefined;
     if (response.status === 429)
-      this.blockedUntil = Date.now() + (delay ?? 30) * 1000;
+      throw new DeliveryError(false, this.pause(delay ?? 30), true);
     if (!response.ok || body?.ok !== true) {
       const messageError =
         response.status === 400 &&
@@ -69,7 +77,9 @@ export class TelegramSender implements Sender {
         this.configurationBlocked = true;
         throw new DeliveryError(false, undefined, true);
       }
-      throw new DeliveryError(messageError, delay);
+      if (messageError) throw new DeliveryError(true);
+      throw new DeliveryError(false, this.pause(delay), true);
     }
+    this.failures = 0;
   }
 }

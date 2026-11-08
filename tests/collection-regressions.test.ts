@@ -149,3 +149,72 @@ test('HTML pagination preserves escaped quotes in server tokens', () => {
     'a"b',
   );
 });
+
+test('Fresh search pages are checked before deep pagination consumes the budget', async () => {
+  const { LinkedInSource } =
+    await import('../services/collector/src/sources/linkedin.js');
+  const config = settingsSchema.parse({
+    sessionFile: 'offline',
+    keywords: ['one', 'two'],
+    searchPathTemplate: '/search/results/content/?keywords={keywords}',
+    maxPages: 3,
+    maxRequestsPerCycle: 2,
+    requestIntervalMs: 1000,
+  });
+  const queried: string[] = [];
+  const source = new LinkedInSource({ ...config, session }, async (input) => {
+    const url = new URL(String(input));
+    queried.push(url.searchParams.get('keywords')!);
+    return html(
+      card(id(queried.length), 'Ищем Frontend разработчика в нашу команду') +
+        `<a rel="next" href="/search/results/content/?keywords=${url.searchParams.get('keywords')}&amp;page=2">Next</a>`,
+    );
+  });
+  await source.fetchPosts();
+  assert.deepEqual(queried, ['one', 'two']);
+});
+
+test('Current nested ContentUrnUgcPostUrn keys decode in HTML and streaming pages', () => {
+  const value = id();
+  const key = `translatable-commentary-FeTranslationUrn(contentUrnUgcPostUrn=ContentUrnUgcPostUrn(userGeneratedContentPostUrn=UserGeneratedContentPostUrn(userGeneratedContentId=${value})), targetLocale=ru)`;
+  const body = card(value, 'Ищем Frontend разработчика в нашу команду').replace(
+    'translatable-commentary-shareId=' + value,
+    key,
+  );
+  assert.equal(decodeSearchHtml(body)[0]?.id, 'urn:li:ugcPost:' + value);
+  assert.equal(
+    decodeFeedPage(
+      '0:' +
+        JSON.stringify({
+          componentKey: key,
+          textProps: { children: 'Ищем Frontend разработчика в нашу команду' },
+        }),
+    )[0]?.id,
+    'urn:li:ugcPost:' + value,
+  );
+});
+
+test('Nested JSON strings preserve pagination tokens without stripping escapes', () => {
+  const request = {
+    $type: 'proto.sdui.actions.requests.PaginationRequest',
+    pagerId: 'com.linkedin.sdui.pagers.feed.mainFeed',
+    requestedArguments: {
+      payload: {
+        requestType: 'Pagination',
+        feedSortOrder: 'FeedSortOrder_RELEVANCE',
+        startIndex: 3,
+        token: 'a"b',
+      },
+    },
+  };
+  const input =
+    '<script>window.data=' +
+    JSON.stringify(JSON.stringify(JSON.stringify(request))) +
+    '</script>';
+  const result = continuation(input, true, 'feed');
+  assert.ok(result);
+  assert.equal(
+    JSON.parse(result.body).paginationRequest.requestedArguments.payload.token,
+    'a"b',
+  );
+});

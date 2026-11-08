@@ -9,6 +9,8 @@ x-app: &app
     SOURCE_MODE: mock
     TELEGRAM_MODE: dry-run
     PREFER_RUSSIAN: ${PREFER_RUSSIAN:-true}
+    COLLECTION_PAUSED: ${COLLECTION_PAUSED:-false}
+    FEED_POLL_INTERVAL_MS: ${FEED_POLL_INTERVAL_MS:-180000}
     POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-180000}
   depends_on:
     migrate:
@@ -52,9 +54,37 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+  ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile.ocr
+    init: true
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          'fetch("http://127.0.0.1:3104/health/ready").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
   processor:
     <<: *app
     command: ['node', 'dist/services/processor/src/main.js']
+    environment:
+      <<: *environment
+      OCR_URL: http://ocr:3104
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      ocr:
+        condition: service_healthy
     ports: ['127.0.0.1:3102:3102']
     healthcheck:
       test:

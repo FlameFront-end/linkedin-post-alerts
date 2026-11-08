@@ -1,8 +1,9 @@
 import { LinkedInJobsSource } from './linkedin/jobs.js';
-import { LinkedInClient } from './linkedin/client.js';
+import { LinkedInClient, RequestGate } from './linkedin/client.js';
 import { readConfig } from '../../../packages/runtime/src/config.js';
 import { createPool } from '../../../packages/runtime/src/db.js';
 import { runService } from '../../../packages/runtime/src/service.js';
+import type { ScheduledTask } from '../../../packages/runtime/src/scheduler.js';
 import { log } from '../../../packages/runtime/src/logger.js';
 import type { PostSource } from './sources/source.js';
 import { MockSource } from './sources/mock.js';
@@ -10,81 +11,141 @@ import { LinkedInSource } from './sources/linkedin.js';
 import { loadSettings } from './linkedin/settings.js';
 import { LinkedInError } from './linkedin/errors.js';
 import { collect } from './collect.js';
-import { alertFor, raiseAlert } from './alerts.js';
-
+import { DatabaseState } from './state.js';
+import { SourceMonitor } from './monitor.js';
 const config = readConfig();
 const pool = createPool(config.DATABASE_URL);
-// Posts already in the durable queue are not fetched again from LinkedIn.
-const knownPosts = async (urns: string[]) => {
-  if (!urns.length) return new Set<string>();
-  const result = await pool.query<{ dedupe_key: string }>(
-    `SELECT dedupe_key FROM queue.jobs WHERE kind='post' AND dedupe_key = ANY($1::text[])`,
-    [urns],
-  );
-  return new Set(result.rows.map((row) => row.dedupe_key));
-};
+const state = new DatabaseState(pool);
+const monitor = new SourceMonitor(pool, state);
+await monitor.restore();
 const settings =
   config.SOURCE_MODE === 'linkedin'
     ? await loadSettings(config.LINKEDIN_CONFIG_FILE)
     : undefined;
-const jobs = settings?.jobsKeywords.length
-  ? new LinkedInJobsSource(
-      new LinkedInClient(
-        settings.session,
-        Math.max(5000, settings.requestIntervalMs),
-      ),
-      settings,
-      knownPosts,
-    )
-  : undefined;
-const source: PostSource =
-  config.SOURCE_MODE === 'mock'
-    ? new MockSource()
-    : new LinkedInSource(settings!, fetch, knownPosts);
-
-async function alertOwner(error?: unknown) {
-  if (!(source instanceof LinkedInSource)) return;
-  const draft = alertFor(source, error);
-  if (!draft) return;
-  try {
-    await raiseAlert(pool, draft);
-  } catch {
-    log('collector', 'alert_failed', { code: draft.code });
-  }
+const knownPosts = async (urns: string[]) =>
+  new Set<string>(
+    (
+      await pool.query<{ id: string }>(
+        "SELECT id FROM processing.observations WHERE id=ANY($1::text[]) AND last_seen_at > now()-interval '30 minutes'",
+        [urns],
+      )
+    ).rows.map((row) => row.id),
+  );
+const tasks: ScheduledTask[] = [];
+function register(
+  name: string,
+  intervalMs: number,
+  source: PostSource & {
+    reports?: { status: string; posts: number; coverageLimited?: boolean }[];
+    shouldPoll?: () => boolean;
+  },
+) {
+  tasks.push({
+    name,
+    intervalMs,
+    tick: async (signal) => {
+      if (
+        config.COLLECTION_PAUSED ||
+        (source.shouldPoll && !source.shouldPoll())
+      )
+        return;
+      let count = 0,
+        failure: string | undefined;
+      try {
+        count = await collect(source, pool, signal, (value) => {
+          count = value;
+        });
+      } catch (error) {
+        if (signal.aborted) throw error;
+        failure = error instanceof LinkedInError ? error.code : 'internal';
+      }
+      if (source.reports && !source.reports.length && !failure) return;
+      await monitor.record(
+        name,
+        source.reports ?? [{ status: failure ?? 'ok', posts: count }],
+        count,
+        failure,
+      );
+      for (const report of source.reports ?? [])
+        log('collector', 'target_result', { source: name, ...report });
+      log('collector', 'poll_completed', {
+        source: name,
+        newPosts: count,
+        status: failure ?? 'completed',
+      });
+    },
+  });
 }
-
+if (settings) {
+  const gate = new RequestGate();
+  const feedBudget = settings.personalFeed
+    ? Math.min(
+        settings.personalFeedLoadMore + 1,
+        settings.maxRequestsPerCycle - 1,
+      )
+    : 0;
+  if (settings.personalFeed)
+    register(
+      'feed',
+      config.FEED_POLL_INTERVAL_MS,
+      new LinkedInSource(
+        {
+          ...settings,
+          keywords: [],
+          authorUrns: [],
+          maxRequestsPerCycle: Math.max(1, feedBudget),
+        },
+        fetch,
+        knownPosts,
+        gate,
+      ),
+    );
+  if (settings.keywords.length || settings.authorUrns.length)
+    register(
+      'search',
+      config.POLL_INTERVAL_MS,
+      new LinkedInSource(
+        {
+          ...settings,
+          personalFeed: false,
+          maxRequestsPerCycle: Math.max(
+            1,
+            settings.maxRequestsPerCycle - feedBudget,
+          ),
+        },
+        fetch,
+        knownPosts,
+        gate,
+      ),
+    );
+  if (settings.jobsKeywords.length)
+    register(
+      'jobs',
+      settings.jobsIntervalMs,
+      new LinkedInJobsSource(
+        new LinkedInClient(
+          settings.session,
+          Math.max(5000, settings.requestIntervalMs),
+        ),
+        settings,
+        knownPosts,
+        state,
+      ),
+    );
+} else register('mock', config.POLL_INTERVAL_MS, new MockSource());
 await runService({
   name: 'collector',
   port: config.COLLECTOR_PORT,
   intervalMs: config.POLL_INTERVAL_MS,
   pool,
-  readyCheck: () => source.isReady?.() ?? true,
-  tick: async (signal) => {
-    let count: number;
-    try {
-      count = await collect(source, pool, signal);
-    } catch (error) {
-      log('collector', 'source_failed', {
-        code: error instanceof LinkedInError ? error.code : 'internal',
-      });
-      if (!signal.aborted) await alertOwner(error);
-      if (signal.aborted) throw error;
-      count = 0;
-    }
-    if (jobs?.shouldPoll() && !signal.aborted) {
-      try {
-        const count = await collect(jobs, pool, signal);
-        log('collector', 'jobs_completed', { count });
-      } catch {
-        log('collector', 'jobs_failed');
-      }
-      for (const report of jobs.reports)
-        log('collector', 'jobs_target', report);
-    }
-    if (source instanceof LinkedInSource)
-      for (const report of source.reports)
-        log('collector', 'target_result', report);
-    log('collector', 'poll_completed', { source: source.name, count });
-    await alertOwner();
-  },
+  tasks,
+  readyCheck: () =>
+    !config.COLLECTION_PAUSED &&
+    monitor.ready(
+      tasks.map((task) => ({ name: task.name, intervalMs: task.intervalMs })),
+    ),
+  diagnostics: async () => ({
+    paused: config.COLLECTION_PAUSED,
+    ...(await monitor.diagnostics()),
+  }),
 });

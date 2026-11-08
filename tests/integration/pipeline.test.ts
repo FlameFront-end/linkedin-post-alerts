@@ -196,8 +196,9 @@ test(
       // Owner alerts go before vacancies and are deduplicated per day.
       await enqueue(pool, 'notification', 'order-vacancy', payload);
       const draft = { code: 'auth_required', message: 'Сессия истекла' };
-      await raiseAlert(pool, draft, new Date('2026-11-06T10:00:00Z'));
-      await raiseAlert(pool, draft, new Date('2026-11-06T12:00:00Z'));
+      const alertTime = Math.floor(Date.now() / 60000) * 60000;
+      await raiseAlert(pool, draft, new Date(alertTime));
+      await raiseAlert(pool, draft, new Date(alertTime + 1));
       const delivered: string[] = [];
       while (
         await deliverNext(

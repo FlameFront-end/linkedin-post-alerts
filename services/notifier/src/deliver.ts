@@ -3,6 +3,9 @@ import {
   vacancyRoles,
 } from '../../../packages/contracts/src/classifier.js';
 import type pg from 'pg';
+import { staleAlert } from './alert-freshness.js';
+import { transaction } from '../../../packages/runtime/src/db.js';
+import type { Post } from '../../../packages/contracts/src/index.js';
 import {
   alertSchema,
   notificationSchema,
@@ -27,9 +30,15 @@ export async function deliverNext(
   // Owner alerts (collection stopped) go before vacancies.
   let job = await claim(pool, 'alert');
   let text: string | undefined;
+  let deliveredPost: Post | undefined;
   const vacancy = !job;
   if (job) {
     const alert = alertSchema.safeParse(job.payload);
+    if (alert.success && staleAlert(alert.data)) {
+      await complete(pool, job);
+      log('notifier', 'stale_alert_skipped', { jobId: job.id });
+      return true;
+    }
     if (alert.success) text = formatAlert(alert.data);
   } else {
     job = await claim(pool, 'notification');
@@ -37,6 +46,24 @@ export async function deliverNext(
     const parsed = notificationSchema.safeParse(job.payload);
     if (parsed.success) {
       const value = parsed.data;
+      deliveredPost = value.post;
+      if (value.vacancyId) {
+        const current = (
+          await pool.query(
+            'SELECT revision,status FROM processing.vacancies WHERE id=$1',
+            [value.vacancyId],
+          )
+        ).rows[0];
+        if (
+          !current ||
+          current.status !== 'open' ||
+          current.revision !== value.revision
+        ) {
+          await complete(pool, job);
+          log('notifier', 'superseded_notification', { jobId: job.id });
+          return true;
+        }
+      }
       const roles = filterVacancies
         ? vacancyRoles(classifyPost(value.post))
         : value.roles;
@@ -50,6 +77,14 @@ export async function deliverNext(
   }
   if (text === undefined) {
     await fail(pool, job, { permanent: true });
+    return true;
+  }
+  const receipt = await pool.query(
+    'SELECT 1 FROM processing.deliveries WHERE job_id=$1',
+    [job.id],
+  );
+  if (receipt.rowCount) {
+    await complete(pool, job);
     return true;
   }
   try {
@@ -69,10 +104,23 @@ export async function deliverNext(
     await fail(pool, job, options);
     return true;
   }
+  const sentAt = new Date().toISOString();
   // Retry acknowledgement only; never immediately resend an already sent message.
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      await complete(pool, job);
+      await transaction(pool, async (db) => {
+        await db.query(
+          'INSERT INTO processing.deliveries(job_id,sent_at,detected_at,published_at,published_precision) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+          [
+            job.id,
+            sentAt,
+            deliveredPost?.firstSeenAt ?? null,
+            deliveredPost?.publishedAt ?? null,
+            deliveredPost?.publishedPrecision ?? 'instant',
+          ],
+        );
+        await complete(db, job);
+      });
       return true;
     } catch {
       if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250));

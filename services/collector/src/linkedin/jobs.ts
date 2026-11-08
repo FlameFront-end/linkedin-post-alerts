@@ -54,7 +54,7 @@ export function decodeJobDetails(
 ): Post | undefined {
   const $ = load(html);
   if (
-    /no longer accepting applications/i.test(
+    /no longer accepting applications|больше не принимает|при[её]м заявок.{0,50}прекращ[её]н|вакансия закрыта/i.test(
       $('.top-card-layout, .topcard').text(),
     )
   )
@@ -237,8 +237,8 @@ export class LinkedInJobsSource {
         });
       } catch (error) {
         if (signal?.aborted) throw error;
-        const failure =
-          error instanceof LinkedInError ? error : new LinkedInError('network');
+        if (!(error instanceof LinkedInError)) throw error;
+        const failure = error;
         this.reports.push({
           query: index,
           discovered: 0,

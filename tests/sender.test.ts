@@ -90,3 +90,46 @@ test('Rate limit pauses the sender before claiming another job', async () => {
     globalThis.fetch = original;
   }
 });
+
+test('Temporary Telegram network or server outage pauses the sender without consuming messages', async () => {
+  const original = globalThis.fetch;
+  try {
+    for (const request of [
+      async () => {
+        throw Error('timeout');
+      },
+      async () => new Response('', { status: 503 }),
+    ]) {
+      globalThis.fetch = request;
+      const sender = new TelegramSender('SECRET', '1');
+      await assert.rejects(
+        sender.send('test'),
+        (e: unknown) =>
+          e instanceof DeliveryError &&
+          e.blocked &&
+          !e.permanent &&
+          e.retryAfterSeconds === 30,
+      );
+      assert.equal(sender.isReady(), false);
+    }
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('Old incident notifications are suppressed while fresh ones remain deliverable', async () => {
+  const { staleAlert } =
+    await import('../services/notifier/src/alert-freshness.js');
+  const now = Date.now();
+  const alert = {
+    source: 'collector' as const,
+    code: 'collection_failing',
+    message: 'Сбой источника',
+    at: new Date(now - 4 * 3600000).toISOString(),
+  };
+  assert.equal(staleAlert(alert, now), true);
+  assert.equal(
+    staleAlert({ ...alert, at: new Date(now - 60000).toISOString() }, now),
+    false,
+  );
+});

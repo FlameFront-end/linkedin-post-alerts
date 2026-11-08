@@ -16,6 +16,14 @@ import {
 } from '../linkedin/global-search.js';
 import { LinkedInError } from '../linkedin/errors.js';
 
+interface TargetReport {
+  index: number;
+  kind: 'author' | 'keyword' | 'feed';
+  status: string;
+  posts: number;
+  coverageLimited?: boolean;
+  budgetLimited?: boolean;
+}
 const HEALTHY = new Set(['ok', 'partial']);
 
 export class LinkedInSource implements PostSource {
@@ -24,12 +32,14 @@ export class LinkedInSource implements PostSource {
   private readonly globalSearch: GlobalPostSearch;
   private disabled = new Map<number, number>();
   private cycle = 0;
+  private deepCycle = 0;
   reports: {
     index: number;
     kind: 'author' | 'keyword' | 'feed';
     status: string;
     posts: number;
     coverageLimited?: boolean;
+    budgetLimited?: boolean;
   }[] = [];
   onPage?: (report: {
     index: number;
@@ -119,6 +129,42 @@ export class LinkedInSource implements PostSource {
       ...other.slice(offset),
       ...other.slice(0, offset),
     ];
+    const pending: {
+      index: number;
+      iterator: ReturnType<GlobalPostSearch['pages']>;
+      report: TargetReport;
+    }[] = [];
+    const consume = (
+      index: number,
+      report: TargetReport,
+      batch: {
+        posts: Post[];
+        discovered: number;
+        failedDetails: number;
+        skippedKnown: number;
+        skippedNoText?: number;
+        coverageLimited?: boolean;
+      },
+    ) => {
+      const fresh = batch.posts.filter(
+        (post) =>
+          Date.parse(post.publishedAt) >=
+          Date.now() - this.settings.maxAgeHours * 3600000,
+      );
+      report.posts += fresh.length;
+      if (batch.failedDetails) report.status = 'partial';
+      report.coverageLimited ||= batch.coverageLimited ?? false;
+      this.onPage?.({
+        index,
+        kind: 'keyword',
+        elements: batch.discovered,
+        posts: batch.posts.length,
+        fresh: fresh.length,
+        skippedNoText: batch.skippedNoText ?? 0,
+        skippedKnown: batch.skippedKnown,
+      });
+      return fresh;
+    };
     let budgetSpent = false;
     let attempted = 0;
     for (const [index, target] of order) {
@@ -143,12 +189,14 @@ export class LinkedInSource implements PostSource {
       if (target.kind !== 'feed') attempted++;
       let token: string | undefined;
       let posts = 0;
+      let parsedPages = 0;
       try {
         if (target.kind === 'feed') {
           const html = await this.client.get(feedPagePath, signal);
           if (typeof html !== 'string')
             throw new LinkedInError('response_format');
           let discovered = decodeSearchHtml(html, new Date(), 'feed');
+          parsedPages++;
           let continuation = feedContinuation(html, true);
           for (
             let page = 0;
@@ -180,6 +228,7 @@ export class LinkedInSource implements PostSource {
               break;
             const response = await this.client.nextPage(continuation, signal);
             discovered = decodeFeedPage(response);
+            parsedPages++;
             continuation = feedContinuation(
               response,
               false,
@@ -195,39 +244,19 @@ export class LinkedInSource implements PostSource {
           continue;
         }
         if (target.kind === 'keyword') {
-          let detailFailures = 0;
-          let coverageLimited = false;
-          for await (const batch of globalSearch.pages(
-            target.keyword,
-            seen,
-            signal,
-          )) {
-            const fresh = batch.posts.filter(
-              (post) =>
-                Date.parse(post.publishedAt) >=
-                Date.now() - this.settings.maxAgeHours * 3600000,
-            );
-            posts += fresh.length;
-            detailFailures += batch.failedDetails;
-            coverageLimited ||= batch.coverageLimited ?? false;
-            this.onPage?.({
-              index,
-              kind: target.kind,
-              elements: batch.discovered,
-              posts: batch.posts.length,
-              fresh: fresh.length,
-              skippedNoText: batch.skippedNoText ?? 0,
-              skippedKnown: batch.skippedKnown,
-            });
-            yield fresh;
-          }
-          this.reports.push({
+          const iterator = globalSearch.pages(target.keyword, seen, signal);
+          const first = await iterator.next();
+          const report: TargetReport = {
             index,
-            kind: target.kind,
-            status: detailFailures ? 'partial' : 'ok',
-            posts,
-            coverageLimited,
-          });
+            kind: 'keyword',
+            status: 'ok',
+            posts: 0,
+          };
+          if (!first.done) {
+            yield consume(index, report, first.value);
+            pending.push({ index, iterator, report });
+          }
+          this.reports.push(report);
           continue;
         }
         for (let page = 0; page < this.settings.maxPages; page++) {
@@ -274,7 +303,8 @@ export class LinkedInSource implements PostSource {
           this.reports.push({
             index,
             kind: target.kind,
-            status: 'budget',
+            status: parsedPages ? 'partial' : 'budget',
+            budgetLimited: true,
             posts,
           });
           continue;
@@ -298,6 +328,39 @@ export class LinkedInSource implements PostSource {
         // A malformed or unavailable target must not starve healthy targets.
       }
     }
+    // Fresh first pages of all queries outrank deeper pages of any one query.
+    if (pending.length)
+      pending.push(...pending.splice(0, this.deepCycle++ % pending.length));
+    while (pending.length && !budgetSpent) {
+      const query = pending.shift()!;
+      try {
+        const page = await query.iterator.next();
+        if (!page.done) {
+          yield consume(query.index, query.report, page.value);
+          pending.push(query);
+        }
+      } catch (error) {
+        if (signal?.aborted || !(error instanceof LinkedInError)) throw error;
+        if (error.code === 'budget') {
+          budgetSpent = true;
+          query.report.budgetLimited = true;
+          break;
+        }
+        query.report.status = error.code;
+        if (error.code === 'auth_required') {
+          this.halted = error;
+          throw error;
+        }
+        if (error.code === 'rate_limited') {
+          this.pausedUntil = Date.now() + error.retryAfterSeconds * 1000;
+          throw error;
+        }
+        if (error.code === 'response_format')
+          this.disabled.set(query.index, Date.now() + 600000);
+      }
+    }
+    if (budgetSpent)
+      for (const query of pending) query.report.budgetLimited = true;
     this.cycle += Math.max(1, attempted);
   }
 

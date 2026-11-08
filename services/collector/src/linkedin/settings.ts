@@ -52,6 +52,15 @@ export const settingsSchema = z
   })
   .superRefine((value, ctx) => {
     if (
+      value.personalFeed &&
+      (value.keywords.length || value.authorUrns.length) &&
+      value.maxRequestsPerCycle < 2
+    )
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Feed plus search requires a request budget of at least 2',
+      });
+    if (
       !value.personalFeed &&
       !value.jobsKeywords.length &&
       !value.authorUrns.length &&

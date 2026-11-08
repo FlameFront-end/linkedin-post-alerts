@@ -1,6 +1,6 @@
 import express from 'express';
 import type pg from 'pg';
-import { setTimeout as sleep } from 'node:timers/promises';
+import { runTask, type ScheduledTask } from './scheduler.js';
 import { log } from './logger.js';
 
 export async function runService(options: {
@@ -8,7 +8,9 @@ export async function runService(options: {
   port: number;
   intervalMs: number;
   pool: pg.Pool;
-  tick: (signal: AbortSignal) => Promise<void>;
+  tick?: (signal: AbortSignal) => Promise<void>;
+  tasks?: ScheduledTask[];
+  diagnostics?: () => Promise<unknown>;
   readyCheck?: () => boolean;
 }) {
   const { name, port, intervalMs, pool, tick } = options;
@@ -28,6 +30,14 @@ export async function runService(options: {
       res.status(503).json({ service: name, status: 'unavailable' });
     }
   });
+  if (options.diagnostics)
+    app.get('/status', async (_req, res) => {
+      try {
+        res.json(await options.diagnostics!());
+      } catch {
+        res.status(503).json({ status: 'unavailable' });
+      }
+    });
   const server = app.listen(port);
   await new Promise<void>((resolve, reject) => {
     server.once('listening', resolve);
@@ -40,16 +50,14 @@ export async function runService(options: {
   process.once('SIGTERM', stop);
   log(name, 'started', { port });
   try {
-    while (!abort.signal.aborted) {
-      try {
-        await tick(abort.signal);
-      } catch {
-        log(name, 'tick_failed');
-      }
-      await sleep(intervalMs, undefined, { signal: abort.signal }).catch(
-        () => undefined,
-      );
-    }
+    const tasks = options.tasks ?? (tick ? [{ name, intervalMs, tick }] : []);
+    await Promise.all(
+      tasks.map((task) =>
+        runTask(task, abort.signal, (taskName) =>
+          log(name, 'tick_failed', { task: taskName }),
+        ),
+      ),
+    );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await pool.end();
