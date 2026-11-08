@@ -1,8 +1,12 @@
+import { load } from 'cheerio';
 import { feedPaginationPath } from './feed-pages.js';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { Session } from './settings.js';
 import { LinkedInError } from './errors.js';
 
+const isJobsPath = (path: string) =>
+  path === '/jobs-guest/jobs/api/seeMoreJobPostings/search' ||
+  /^\/jobs-guest\/jobs\/api\/jobPosting\/\d{6,15}$/.test(path);
 export const feedPagePath = '/feed/foryou/';
 export const searchPagePath = '/search/results/content/';
 
@@ -11,11 +15,13 @@ export function checkedUrl(path: string) {
   if (
     (!path.startsWith('/voyager/api/') &&
       !path.startsWith(searchPagePath + '?') &&
-      path !== feedPagePath) ||
+      path !== feedPagePath &&
+      !isJobsPath(url.pathname)) ||
     url.origin !== 'https://www.linkedin.com' ||
     (!url.pathname.startsWith('/voyager/api/') &&
       url.pathname !== searchPagePath &&
-      url.pathname !== feedPagePath) ||
+      url.pathname !== feedPagePath &&
+      !isJobsPath(url.pathname)) ||
     url.username ||
     url.password ||
     url.hash
@@ -58,7 +64,9 @@ export class LinkedInClient {
     body?: string,
   ): Promise<unknown> {
     const html =
-      url.pathname === searchPagePath || url.pathname === feedPagePath;
+      url.pathname === searchPagePath ||
+      url.pathname === feedPagePath ||
+      isJobsPath(url.pathname);
     if (this.used >= this.limit) throw new LinkedInError('budget');
     this.used++;
     const delay = Math.max(0, this.nextRequestAt - Date.now());
@@ -76,10 +84,14 @@ export class LinkedInClient {
           ...(this.session.userAgent
             ? { 'user-agent': this.session.userAgent }
             : {}),
-          cookie: `li_at=${this.session.liAt}; JSESSIONID=${this.session.jsessionId}`,
-          'csrf-token':
-            this.session.csrfToken ??
-            this.session.jsessionId.replace(/^"|"$/g, ''),
+          ...(isJobsPath(url.pathname)
+            ? {}
+            : {
+                cookie: `li_at=${this.session.liAt}; JSESSIONID=${this.session.jsessionId}`,
+                'csrf-token':
+                  this.session.csrfToken ??
+                  this.session.jsessionId.replace(/^"|"$/g, ''),
+              }),
           'x-restli-protocol-version': '2.0.0',
           ...(body === undefined
             ? {}
@@ -145,6 +157,17 @@ export class LinkedInClient {
         reader.releaseLock();
       }
       const content = Buffer.concat(chunks).toString('utf8');
+      if (html) {
+        const page = load(content);
+        page('script,style').remove();
+        if (
+          /Наши системы обнаружили необычн|we(?:'ve| have) detected unusual|unusual activity from your|security verification required/i.test(
+            page('body').text(),
+          )
+        ) {
+          throw new LinkedInError('auth_required', 60, 'verification_required');
+        }
+      }
       if (html || body !== undefined) return content;
       try {
         const data: unknown = JSON.parse(content);

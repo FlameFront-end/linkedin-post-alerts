@@ -23,6 +23,10 @@ export type Session = z.infer<typeof sessionSchema>;
 export const settingsSchema = z
   .object({
     sessionFile: z.string().min(1),
+    jobsKeywords: z.array(z.string().min(1).max(300)).max(12).default([]),
+    jobsIntervalMs: z.number().int().min(300000).max(86400000).default(900000),
+    jobsMaxAgeHours: z.number().int().min(24).max(168).default(168),
+    jobsDetailsPerQuery: z.number().int().min(1).max(3).default(3),
     personalFeed: z.boolean().default(false),
     personalFeedLoadMore: z.number().int().min(0).max(20).default(2),
     authorUrns: z
@@ -47,6 +51,7 @@ export const settingsSchema = z
   .superRefine((value, ctx) => {
     if (
       !value.personalFeed &&
+      !value.jobsKeywords.length &&
       !value.authorUrns.length &&
       !value.keywords.length
     )

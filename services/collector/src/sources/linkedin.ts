@@ -21,7 +21,7 @@ export class LinkedInSource implements PostSource {
   readonly name = 'linkedin';
   private readonly client: LinkedInClient;
   private readonly globalSearch: GlobalPostSearch;
-  private disabled = new Set<number>();
+  private disabled = new Map<number, number>();
   private cycle = 0;
   reports: {
     index: number;
@@ -126,7 +126,7 @@ export class LinkedInSource implements PostSource {
         });
         continue;
       }
-      if (this.disabled.has(index)) {
+      if ((this.disabled.get(index) ?? 0) > Date.now()) {
         this.reports.push({
           index,
           kind: target.kind,
@@ -287,7 +287,7 @@ export class LinkedInSource implements PostSource {
           throw failure;
         }
         if (failure.code === 'response_format' && target.kind !== 'feed')
-          this.disabled.add(index);
+          this.disabled.set(index, Date.now() + 600000);
         // A malformed or unavailable target must not starve healthy targets.
       }
     }

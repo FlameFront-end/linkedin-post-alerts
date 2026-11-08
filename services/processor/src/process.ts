@@ -8,7 +8,7 @@ import {
 } from '../../../packages/queue/src/index.js';
 import { transaction } from '../../../packages/runtime/src/db.js';
 import { log } from '../../../packages/runtime/src/logger.js';
-import { classify, vacancyRoles } from './classifier.js';
+import { classifyPost, vacancyRoles } from './classifier.js';
 
 export async function processNext(
   pool: pg.Pool,
@@ -24,7 +24,7 @@ export async function processNext(
   }
   try {
     const post = parsed.data;
-    const decision = classify(post.text);
+    const decision = classifyPost(post);
     const roles = filterVacancies ? vacancyRoles(decision) : decision.roles;
     await transaction(pool, async (db) => {
       await db.query(

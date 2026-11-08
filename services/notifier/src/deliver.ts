@@ -1,5 +1,5 @@
 import {
-  classify,
+  classifyPost,
   vacancyRoles,
 } from '../../../packages/contracts/src/classifier.js';
 import type pg from 'pg';
@@ -38,7 +38,7 @@ export async function deliverNext(
     if (parsed.success) {
       const value = parsed.data;
       const roles = filterVacancies
-        ? vacancyRoles(classify(value.post.text))
+        ? vacancyRoles(classifyPost(value.post))
         : value.roles;
       if (!roles.length) {
         await complete(pool, job);

@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 export const postSchema = z.object({
   id: z.string().min(1).max(200),
+  kind: z.enum(['post', 'job']).optional(),
+  title: z.string().min(1).max(500).optional(),
+  location: z.string().max(500).optional(),
   url: z
     .url()
     .max(1000)

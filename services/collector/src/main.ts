@@ -1,3 +1,5 @@
+import { LinkedInJobsSource } from './linkedin/jobs.js';
+import { LinkedInClient } from './linkedin/client.js';
 import { readConfig } from '../../../packages/runtime/src/config.js';
 import { createPool } from '../../../packages/runtime/src/db.js';
 import { runService } from '../../../packages/runtime/src/service.js';
@@ -21,14 +23,24 @@ const knownPosts = async (urns: string[]) => {
   );
   return new Set(result.rows.map((row) => row.dedupe_key));
 };
+const settings =
+  config.SOURCE_MODE === 'linkedin'
+    ? await loadSettings(config.LINKEDIN_CONFIG_FILE)
+    : undefined;
+const jobs = settings?.jobsKeywords.length
+  ? new LinkedInJobsSource(
+      new LinkedInClient(
+        settings.session,
+        Math.max(5000, settings.requestIntervalMs),
+      ),
+      settings,
+      knownPosts,
+    )
+  : undefined;
 const source: PostSource =
   config.SOURCE_MODE === 'mock'
     ? new MockSource()
-    : new LinkedInSource(
-        await loadSettings(config.LINKEDIN_CONFIG_FILE),
-        fetch,
-        knownPosts,
-      );
+    : new LinkedInSource(settings!, fetch, knownPosts);
 
 async function alertOwner(error?: unknown) {
   if (!(source instanceof LinkedInSource)) return;
@@ -56,7 +68,18 @@ await runService({
         code: error instanceof LinkedInError ? error.code : 'internal',
       });
       if (!signal.aborted) await alertOwner(error);
-      throw error;
+      if (signal.aborted) throw error;
+      count = 0;
+    }
+    if (jobs?.shouldPoll() && !signal.aborted) {
+      try {
+        const count = await collect(jobs, pool, signal);
+        log('collector', 'jobs_completed', { count });
+      } catch {
+        log('collector', 'jobs_failed');
+      }
+      for (const report of jobs.reports)
+        log('collector', 'jobs_target', report);
     }
     if (source instanceof LinkedInSource)
       for (const report of source.reports)
