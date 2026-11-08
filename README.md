@@ -1,3 +1,5 @@
+> Защита и текущие лимиты: [TRAFFIC_PROTECTION.md](docs/TRAFFIC_PROTECTION.md). `linkedin:check` по умолчанию больше не отправляет запросы.
+
 > Актуальный статус и исправления: [FIXES_2026-11-08.md](docs/FIXES_2026-11-08.md). Сбор временно приостановлен из-за проверки LinkedIn.
 
 # LinkedIn Post Alerts

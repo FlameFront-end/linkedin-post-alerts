@@ -1,6 +1,11 @@
 import type { Database } from '../../../packages/runtime/src/db.js';
 import type { StateStore } from './state.js';
 import { raiseAlert } from './alerts.js';
+const controlledPauses = new Set([
+  'request_limit',
+  'protection_pause',
+  'cooldown',
+]);
 export interface SourceHealth {
   status: string;
   lastAttemptAt: string;
@@ -75,7 +80,10 @@ export class SourceMonitor {
         : previous?.lastSuccessAt
           ? { lastSuccessAt: previous.lastSuccessAt }
           : {}),
-      failures: success ? 0 : (previous?.failures ?? 0) + 1,
+      failures:
+        success || controlledPauses.has(status)
+          ? 0
+          : (previous?.failures ?? 0) + 1,
       newPosts,
       discovered: reports.reduce(
         (n, report) => n + (report.discovered ?? report.posts),
@@ -94,14 +102,28 @@ export class SourceMonitor {
     await this.saving;
     if (
       !success &&
-      (['auth_required', 'rate_limited'].includes(status) ||
+      !controlledPauses.has(status) &&
+      ([
+        'auth_required',
+        'rate_limited',
+        'search_restricted',
+        'source_blocked',
+      ].includes(status) ||
         this.sources[name]!.failures >= 2)
     )
       await raiseAlert(this.db, {
         code: `${name}_${status}`.slice(0, 64),
-        message: `${name}: сбор не работает (${status}). Новых публикаций в этом цикле: ${newPosts}. Последний успех: ${previous?.lastSuccessAt ?? 'ещё не было'}.`,
+        message:
+          status === 'search_restricted'
+            ? 'LinkedIn приостановил поисковые действия. Поиск отключён до ручного подтверждения, что он снова работает в браузере. Ограничение сохраняется после перезапуска сервиса.'
+            : `${name}: сбор не работает (${status}). Новых публикаций в этом цикле: ${newPosts}. Последний успех: ${previous?.lastSuccessAt ?? 'ещё не было'}.`,
       });
-    if (success && previous && !['ok', 'partial'].includes(previous.status))
+    if (
+      success &&
+      previous &&
+      !controlledPauses.has(previous.status) &&
+      !['ok', 'partial'].includes(previous.status)
+    )
       await raiseAlert(this.db, {
         code: `${name}_recovered`,
         message: `${name}: сбор восстановлен. Новых публикаций: ${newPosts}.`,

@@ -1,4 +1,5 @@
 import { load } from 'cheerio';
+import { minimumPollMs, type ScopedProtection } from './protection.js';
 import { plausibleJobTitle } from '../../../../packages/contracts/src/classifier.js';
 import type { StateStore } from '../state.js';
 import {
@@ -92,6 +93,7 @@ export class LinkedInJobsSource {
   private offset = 0;
   private readonly cache = new Map<string, { post: Post; expires: number }>();
   private readonly deferred = new Map<string, number>();
+  private readonly refreshed = new Map<string, number>();
   private readonly cursors = new Map<number, number>();
   private initialized = false;
   reports: {
@@ -105,6 +107,7 @@ export class LinkedInJobsSource {
     private readonly settings: Settings,
     private readonly known?: KnownPosts,
     private readonly state?: StateStore,
+    private readonly protection?: ScopedProtection,
   ) {}
   shouldPoll() {
     return (
@@ -120,11 +123,14 @@ export class LinkedInJobsSource {
           offset?: number;
           deferred?: [string, number][];
           cursors?: [number, number][];
+          refreshed?: [string, number][];
         };
         this.nextPollAt = value.nextPollAt ?? 0;
         this.offset = (value.offset ?? 0) % this.settings.jobsKeywords.length;
         for (const [key, until] of value.deferred ?? [])
           if (until > Date.now()) this.deferred.set(key, until);
+        for (const [key, at] of value.refreshed ?? [])
+          this.refreshed.set(key, at);
         for (const [key, cursor] of value.cursors ?? [])
           this.cursors.set(key, cursor);
       }
@@ -133,7 +139,10 @@ export class LinkedInJobsSource {
     if (!this.shouldPoll()) return;
     this.nextPollAt = Date.now() + this.settings.jobsIntervalMs;
     this.reports = [];
-    this.client.beginCycle(this.settings.jobsRequestBudget);
+    this.client.beginCycle(
+      (await this.protection?.budget(this.settings.jobsRequestBudget)) ??
+        this.settings.jobsRequestBudget,
+    );
     const total = this.settings.jobsKeywords.length;
     const first = this.offset;
     this.offset = (first + Math.min(2, total)) % total;
@@ -174,11 +183,30 @@ export class LinkedInJobsSource {
           const posts: Post[] = [];
 
           let traversed = 0;
-          for (const card of cards) {
+          const eligible = cards.filter(
+            (card) =>
+              plausibleJobTitle(card.title) &&
+              (this.deferred.get(card.id) ?? 0) <= Date.now(),
+          );
+          const unseen = eligible.filter(
+            (card) => !known.has(`urn:li:jobPosting:${card.id}`),
+          );
+          const refresh = eligible
+            .filter(
+              (card) =>
+                known.has(`urn:li:jobPosting:${card.id}`) &&
+                (this.refreshed.get(card.id) ?? 0) <= Date.now() - 21600000,
+            )
+            .sort(
+              (a, b) =>
+                (this.refreshed.get(a.id) ?? 0) -
+                (this.refreshed.get(b.id) ?? 0),
+            )
+            .slice(0, 1);
+          for (const card of unseen.length ? unseen : refresh) {
             if (details >= this.settings.jobsDetailsPerQuery) break;
-            traversed++;
+            traversed = Math.max(traversed, cards.indexOf(card) + 1);
             signal?.throwIfAborted();
-            if (known.has(`urn:li:jobPosting:${card.id}`)) continue;
             if (!plausibleJobTitle(card.title)) continue;
             if ((this.deferred.get(card.id) ?? 0) > Date.now()) continue;
             const cached = this.cache.get(card.id);
@@ -197,6 +225,7 @@ export class LinkedInJobsSource {
                 throw new LinkedInError('response_format');
               const post = decodeJobDetails(detail, card);
               if (post) {
+                this.refreshed.set(card.id, Date.now());
                 this.cache.set(card.id, {
                   post,
                   expires: Date.now() + 1800000,
@@ -204,22 +233,56 @@ export class LinkedInJobsSource {
                 if (this.cache.size > 500)
                   this.cache.delete(this.cache.keys().next().value!);
                 posts.push(post);
-              } else this.deferred.set(card.id, Date.now() + 3600000);
+              } else
+                this.deferred.set(
+                  card.id,
+                  Date.now() +
+                    Math.max(
+                      3600000,
+                      2 *
+                        Math.max(
+                          minimumPollMs.jobs,
+                          this.settings.jobsIntervalMs,
+                        ) +
+                        60000,
+                    ),
+                );
             } catch (error) {
               if (
                 signal?.aborted ||
                 (error instanceof LinkedInError &&
-                  ['rate_limited', 'auth_required', 'budget'].includes(
-                    error.code,
-                  ))
+                  [
+                    'rate_limited',
+                    'auth_required',
+                    'budget',
+                    'search_restricted',
+                    'source_blocked',
+                    'request_limit',
+                    'protection_pause',
+                  ].includes(error.code))
               ) {
                 if (posts.length) yield posts;
                 throw error;
               }
+              if (error instanceof LinkedInError)
+                await this.protection?.failure(error);
               failures++;
-              this.deferred.set(card.id, Date.now() + 1800000);
+              this.deferred.set(
+                card.id,
+                Date.now() +
+                  Math.max(
+                    1800000,
+                    2 *
+                      Math.max(
+                        minimumPollMs.jobs,
+                        this.settings.jobsIntervalMs,
+                      ) +
+                      60000,
+                  ),
+              );
             }
           }
+          if (!unseen.length) traversed = cards.length;
           loaded += posts.length;
           yield posts;
           if (start > 0)
@@ -239,6 +302,19 @@ export class LinkedInJobsSource {
         if (signal?.aborted) throw error;
         if (!(error instanceof LinkedInError)) throw error;
         const failure = error;
+        await this.protection?.failure(failure);
+        if (
+          [
+            'search_restricted',
+            'source_blocked',
+            'request_limit',
+            'protection_pause',
+          ].includes(failure.code)
+        ) {
+          this.offset = index;
+          await this.persist();
+          throw failure;
+        }
         this.reports.push({
           query: index,
           discovered: 0,
@@ -258,7 +334,10 @@ export class LinkedInJobsSource {
           await this.persist();
           return;
         }
-        if (failure.code === 'budget') break;
+        if (failure.code === 'budget') {
+          this.offset = index;
+          break;
+        }
       }
     }
     await this.persist();
@@ -268,11 +347,14 @@ export class LinkedInJobsSource {
       if (until <= Date.now()) this.deferred.delete(key);
     while (this.deferred.size > 2000)
       this.deferred.delete(this.deferred.keys().next().value!);
+    while (this.refreshed.size > 2000)
+      this.refreshed.delete(this.refreshed.keys().next().value!);
     await this.state?.save('jobs', {
       nextPollAt: this.nextPollAt,
       offset: this.offset,
       deferred: [...this.deferred],
       cursors: [...this.cursors],
+      refreshed: [...this.refreshed],
     });
   }
   async fetchPosts(signal?: AbortSignal) {

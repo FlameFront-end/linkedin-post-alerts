@@ -218,3 +218,61 @@ test('Nested JSON strings preserve pagination tokens without stripping escapes',
     'a"b',
   );
 });
+
+test('Small Jobs warm-up budgets rotate to the query that could not run', async () => {
+  const settings = {
+    ...settingsSchema.parse({
+      sessionFile: 'offline',
+      jobsKeywords: ['one', 'two', 'three'],
+      jobsMaxPages: 1,
+      jobsDetailsPerQuery: 1,
+      jobsRequestBudget: 4,
+    }),
+    jobsIntervalMs: 0,
+  };
+  const queried: string[] = [];
+  const source = new LinkedInJobsSource(
+    new LinkedInClient(session, 0, async (value) => {
+      const url = new URL(String(value));
+      if (url.pathname.endsWith('/search')) {
+        queried.push(url.searchParams.get('keywords')!);
+        return html(cards([12345679]));
+      }
+      return html(detail);
+    }),
+    settings,
+    undefined,
+    undefined,
+    {
+      budget: async () => 2,
+      failure: async () => {},
+      run: async (operation) => operation(),
+    },
+  );
+  await source.fetchPosts();
+  await source.fetchPosts();
+  assert.deepEqual(queried.slice(0, 2), ['one', 'two']);
+});
+
+test('A slower protected Jobs poll prioritizes unseen cards over old top results', async () => {
+  const config = settingsSchema.parse({
+    sessionFile: 'offline',
+    jobsKeywords: ['frontend'],
+    jobsMaxPages: 1,
+    jobsDetailsPerQuery: 1,
+  });
+  const details: string[] = [];
+  const source = new LinkedInJobsSource(
+    new LinkedInClient(session, 0, async (value) => {
+      const url = new URL(String(value));
+      if (url.pathname.endsWith('/search'))
+        return html(cards([12345671, 12345672]));
+      details.push(url.pathname);
+      return html(detail);
+    }),
+    config,
+    async () => new Set(['urn:li:jobPosting:12345671']),
+  );
+  await source.fetchPosts();
+  assert.deepEqual(details, ['/jobs-guest/jobs/api/jobPosting/12345672']);
+});

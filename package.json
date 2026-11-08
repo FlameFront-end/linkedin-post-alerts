@@ -18,7 +18,7 @@
     "demo": "tsx scripts/demo.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "linkedin:check": "tsx scripts/linkedin-check.ts",
+    "linkedin:check": "node --env-file-if-exists=.env --import tsx scripts/linkedin-check.ts",
     "queue:replay": "node --env-file-if-exists=.env --import tsx scripts/replay.ts",
     "posts:audit": "node --env-file-if-exists=.env --import tsx scripts/reprocess.ts"
   },

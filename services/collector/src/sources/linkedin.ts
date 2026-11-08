@@ -1,5 +1,6 @@
 import { decodeFeedPage, feedContinuation } from '../linkedin/feed-pages.js';
 import { decodeSearchHtml } from '../linkedin/search-html.js';
+import type { ScopedProtection } from '../linkedin/protection.js';
 import type { PostSource } from './source.js';
 import type { Post } from '../../../../packages/contracts/src/index.js';
 import {
@@ -57,12 +58,14 @@ export class LinkedInSource implements PostSource {
     request: typeof fetch = fetch,
     known?: KnownPosts,
     gate?: RequestGate,
+    private readonly protection?: ScopedProtection,
   ) {
     this.client = new LinkedInClient(
       settings.session,
       settings.requestIntervalMs,
       request,
       gate,
+      protection,
     );
     this.globalSearch = new GlobalPostSearch(this.client, settings, known);
     if (settings.searchPathTemplate) checkedUrl(settings.searchPathTemplate);
@@ -116,7 +119,10 @@ export class LinkedInSource implements PostSource {
       ...(this.settings.personalFeed ? [{ kind: 'feed' as const }] : []),
     ];
     this.reports = [];
-    this.client.beginCycle(this.settings.maxRequestsPerCycle);
+    this.client.beginCycle(
+      (await this.protection?.budget(this.settings.maxRequestsPerCycle)) ??
+        this.settings.maxRequestsPerCycle,
+    );
     const seen = new Set<string>();
     const globalSearch = this.globalSearch;
     // Refresh the feed first, then rotate the remaining targets for fairness.
@@ -297,6 +303,18 @@ export class LinkedInSource implements PostSource {
         // Abort, database and programming errors are not target failures.
         if (signal?.aborted || !(error instanceof LinkedInError)) throw error;
         const failure = error;
+        await this.protection?.failure(failure);
+        if (
+          [
+            'search_restricted',
+            'source_blocked',
+            'request_limit',
+            'protection_pause',
+          ].includes(failure.code)
+        ) {
+          this.cycle += Math.max(0, attempted - 1);
+          throw failure;
+        }
         if (failure.code === 'budget') {
           budgetSpent = true;
           if (target.kind !== 'feed') attempted--;
@@ -341,6 +359,16 @@ export class LinkedInSource implements PostSource {
         }
       } catch (error) {
         if (signal?.aborted || !(error instanceof LinkedInError)) throw error;
+        await this.protection?.failure(error);
+        if (
+          [
+            'search_restricted',
+            'source_blocked',
+            'request_limit',
+            'protection_pause',
+          ].includes(error.code)
+        )
+          throw error;
         if (error.code === 'budget') {
           budgetSpent = true;
           query.report.budgetLimited = true;

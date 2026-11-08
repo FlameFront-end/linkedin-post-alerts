@@ -20,6 +20,10 @@ const FATAL = new Set([
   'rate_limited',
   'configuration',
   'budget',
+  'search_restricted',
+  'source_blocked',
+  'request_limit',
+  'protection_pause',
 ]);
 
 export class GlobalPostSearch {

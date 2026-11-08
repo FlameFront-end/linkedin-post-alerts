@@ -24,11 +24,11 @@
     "fullstack"
   ],
   "pageSize": 10,
-  "maxPages": 1,
+  "maxPages": 2,
   "maxAgeHours": 72,
-  "requestIntervalMs": 3000,
-  "maxDetailsPerQuery": 8,
-  "maxRequestsPerCycle": 30,
+  "requestIntervalMs": 20000,
+  "maxDetailsPerQuery": 2,
+  "maxRequestsPerCycle": 5,
   "jobsKeywords": [
     "frontend Russian",
     "full stack Russian",
@@ -39,7 +39,17 @@
     "фронтенд",
     "фуллстек"
   ],
-  "jobsIntervalMs": 300000,
+  "jobsIntervalMs": 3600000,
   "jobsMaxAgeHours": 168,
-  "jobsDetailsPerQuery": 3
+  "jobsDetailsPerQuery": 1,
+  "personalFeedLoadMore": 2,
+  "jobsMaxPages": 1,
+  "jobsRequestBudget": 4,
+  "protection": {
+    "minGapMs": 20000,
+    "hourlyRequests": 20,
+    "dailyRequests": 150,
+    "searchHourlyRequests": 4,
+    "searchDailyRequests": 20
+  }
 }

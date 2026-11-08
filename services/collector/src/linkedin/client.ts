@@ -1,4 +1,5 @@
 import { load } from 'cheerio';
+import type { ScopedProtection } from './protection.js';
 import { feedPaginationPath } from './feed-pages.js';
 import { validPager, type Continuation } from './pagination.js';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -62,7 +63,15 @@ export class LinkedInClient {
     private readonly intervalMs: number,
     private readonly request: typeof fetch = fetch,
     private readonly gate?: RequestGate,
-  ) {}
+    private readonly protection?: ScopedProtection,
+  ) {
+    if (request === fetch && !protection)
+      throw new LinkedInError(
+        'configuration',
+        60,
+        'durable_protection_required',
+      );
+  }
   // Hard cap of HTTP requests per collection cycle, independent of query settings.
   beginCycle(limit: number) {
     this.used = 0;
@@ -98,6 +107,19 @@ export class LinkedInClient {
     return result;
   }
   private async fetchResponse(
+    url: URL,
+    signal?: AbortSignal,
+    body?: string,
+  ): Promise<unknown> {
+    if (this.used >= this.limit) throw new LinkedInError('budget');
+    if (this.protection)
+      return this.protection.run(
+        () => this.performResponse(url, signal, body),
+        signal,
+      );
+    return this.performResponse(url, signal, body);
+  }
+  private async performResponse(
     url: URL,
     signal?: AbortSignal,
     body?: string,
@@ -161,22 +183,25 @@ export class LinkedInClient {
         throw new LinkedInError(
           'rate_limited',
           Number.isFinite(seconds)
-            ? Math.max(60, Math.min(86400, Math.ceil(seconds)))
+            ? Math.max(60, Math.min(604800, Math.ceil(seconds)))
             : 300,
+          Number.isFinite(seconds) && seconds > 604800
+            ? 'retry_after_exceeds_week'
+            : undefined,
         );
       }
+      if ([404, 410].includes(response.status))
+        throw new LinkedInError('item_unavailable');
       if (!response.ok) throw new LinkedInError('http_error');
-      if (
-        !response.headers
-          .get('content-type')
-          ?.includes(
-            body !== undefined
-              ? 'application/octet-stream'
-              : html
-                ? 'text/html'
-                : 'json',
-          )
-      )
+      const contentType = response.headers.get('content-type') ?? '';
+      const returnedHtml = contentType.includes('text/html');
+      const expectedType =
+        body !== undefined
+          ? 'application/octet-stream'
+          : html
+            ? 'text/html'
+            : 'json';
+      if (!contentType.includes(expectedType) && !returnedHtml)
         throw new LinkedInError('response_format');
       const reader = response.body?.getReader();
       if (!reader) throw new LinkedInError('response_format');
@@ -197,17 +222,40 @@ export class LinkedInClient {
         reader.releaseLock();
       }
       const content = Buffer.concat(chunks).toString('utf8');
-      if (html) {
+      if (html || body !== undefined || returnedHtml) {
         const page = load(content);
         page('script,style').remove();
+        const banner = page('[role="alert"], [role="dialog"]').text();
+        const hasCards =
+          page(
+            '[componentkey^="update-card-focus"], [data-urn^="urn:li:activity:"]',
+          ).length > 0;
+        const visible = (
+          banner || (hasCards ? '' : page('body').text())
+        ).replace(/\s+/g, ' ');
         if (
-          /Наши системы обнаружили необычн|we(?:'ve| have) detected unusual|unusual activity from your|security verification required/i.test(
-            page('body').text(),
+          /необычн.{0,40}поисков|поисковые действия.{0,100}приостановлен|unusual search traffic|search activities.{0,100}(?:suspended|restricted)|search(?:ing)?.{0,40}temporarily restricted/i.test(
+            visible,
           )
-        ) {
-          throw new LinkedInError('auth_required', 60, 'verification_required');
-        }
+        )
+          throw new LinkedInError(
+            'search_restricted',
+            3600,
+            'search_suspended',
+          );
+        if (
+          /Наши системы обнаружили необычн|we(?:'ve| have) detected unusual|unusual activity from your|security verification required|captcha|security challenge/i.test(
+            visible,
+          )
+        )
+          throw new LinkedInError(
+            'auth_required',
+            3600,
+            'verification_required',
+          );
       }
+      if (returnedHtml && !html && body === undefined)
+        throw new LinkedInError('response_format');
       if (html || body !== undefined) return content;
       try {
         const data: unknown = JSON.parse(content);

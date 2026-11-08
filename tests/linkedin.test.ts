@@ -245,7 +245,10 @@ test('Bad first author does not starve a healthy author', async () => {
   await source.fetchPosts();
   await source.fetchPosts();
   assert.equal(healthy, 2);
-  assert.equal(source.reports.find((r) => r.index === 0)?.status, 'http_error');
+  assert.equal(
+    source.reports.find((r) => r.index === 0)?.status,
+    'item_unavailable',
+  );
 });
 test('Media-only updates are skipped; repost preserves outer ID and original vacancy text', () => {
   const media = {

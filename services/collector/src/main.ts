@@ -1,5 +1,7 @@
+import { TrafficProtection, minimumPollMs } from './linkedin/protection.js';
+import { DatabaseProtectionStore } from './linkedin/protection-store.js';
 import { LinkedInJobsSource } from './linkedin/jobs.js';
-import { LinkedInClient, RequestGate } from './linkedin/client.js';
+import { LinkedInClient } from './linkedin/client.js';
 import { readConfig } from '../../../packages/runtime/src/config.js';
 import { createPool } from '../../../packages/runtime/src/db.js';
 import { runService } from '../../../packages/runtime/src/service.js';
@@ -31,6 +33,19 @@ const knownPosts = async (urns: string[]) =>
       )
     ).rows.map((row) => row.id),
   );
+const knownJobs = async (urns: string[]) =>
+  new Set<string>(
+    (
+      await pool.query<{ id: string }>(
+        'SELECT id FROM processing.observations WHERE id=ANY($1::text[])',
+        [urns],
+      )
+    ).rows.map((row) => row.id),
+  );
+const protection = new TrafficProtection(
+  new DatabaseProtectionStore(pool),
+  settings?.protection,
+);
 const tasks: ScheduledTask[] = [];
 function register(
   name: string,
@@ -77,7 +92,6 @@ function register(
   });
 }
 if (settings) {
-  const gate = new RequestGate();
   const feedBudget = settings.personalFeed
     ? Math.min(
         settings.personalFeedLoadMore + 1,
@@ -87,7 +101,7 @@ if (settings) {
   if (settings.personalFeed)
     register(
       'feed',
-      config.FEED_POLL_INTERVAL_MS,
+      Math.max(minimumPollMs.feed, config.FEED_POLL_INTERVAL_MS),
       new LinkedInSource(
         {
           ...settings,
@@ -97,13 +111,14 @@ if (settings) {
         },
         fetch,
         knownPosts,
-        gate,
+        undefined,
+        protection.forScope('feed'),
       ),
     );
   if (settings.keywords.length || settings.authorUrns.length)
     register(
       'search',
-      config.POLL_INTERVAL_MS,
+      Math.max(minimumPollMs.search, config.POLL_INTERVAL_MS),
       new LinkedInSource(
         {
           ...settings,
@@ -115,21 +130,26 @@ if (settings) {
         },
         fetch,
         knownPosts,
-        gate,
+        undefined,
+        protection.forScope('search'),
       ),
     );
   if (settings.jobsKeywords.length)
     register(
       'jobs',
-      settings.jobsIntervalMs,
+      Math.max(minimumPollMs.jobs, settings.jobsIntervalMs),
       new LinkedInJobsSource(
         new LinkedInClient(
           settings.session,
           Math.max(5000, settings.requestIntervalMs),
+          fetch,
+          undefined,
+          protection.forScope('jobs'),
         ),
         settings,
-        knownPosts,
+        knownJobs,
         state,
+        protection.forScope('jobs'),
       ),
     );
 } else register('mock', config.POLL_INTERVAL_MS, new MockSource());
@@ -146,6 +166,12 @@ await runService({
     ),
   diagnostics: async () => ({
     paused: config.COLLECTION_PAUSED,
+    protection: await protection.snapshot(),
+    limits: settings?.protection,
+    schedule: tasks.map((task) => ({
+      source: task.name,
+      intervalMs: task.intervalMs,
+    })),
     ...(await monitor.diagnostics()),
   }),
 });

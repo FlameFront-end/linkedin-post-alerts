@@ -5,7 +5,8 @@
 services:
   collector:
     environment:
-      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-900000}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-1800000}
+      FEED_POLL_INTERVAL_MS: ${FEED_POLL_INTERVAL_MS:-600000}
       RETENTION_DAYS: ${RETENTION_DAYS:-30}
   processor:
     environment:

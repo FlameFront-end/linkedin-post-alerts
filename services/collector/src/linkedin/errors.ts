@@ -1,8 +1,13 @@
 export type LinkedInErrorCode =
   | 'auth_required'
+  | 'search_restricted'
+  | 'source_blocked'
+  | 'request_limit'
+  | 'protection_pause'
   | 'rate_limited'
   | 'network'
   | 'http_error'
+  | 'item_unavailable'
   | 'response_format'
   | 'response_too_large'
   | 'configuration'

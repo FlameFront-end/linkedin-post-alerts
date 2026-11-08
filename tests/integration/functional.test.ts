@@ -165,6 +165,39 @@ test(
         ).rows[0].n,
         1,
       );
+      // Two collector processes cannot each spend the same last quota slot.
+      const { TrafficProtection, protectionPolicySchema } =
+        await import('../../services/collector/src/linkedin/protection.js');
+      const { DatabaseProtectionStore } =
+        await import('../../services/collector/src/linkedin/protection-store.js');
+      const policy = protectionPolicySchema.parse({ hourlyRequests: 1 });
+      const guardA = new TrafficProtection(
+        new DatabaseProtectionStore(pool),
+        policy,
+      );
+      const guardB = new TrafficProtection(
+        new DatabaseProtectionStore(pool),
+        policy,
+      );
+      let physicalRequests = 0;
+      const reservations = await Promise.allSettled([
+        guardA.run('feed', async () => {
+          physicalRequests++;
+        }),
+        guardB.run('jobs', async () => {
+          physicalRequests++;
+        }),
+      ]);
+      assert.equal(physicalRequests, 1);
+      assert.equal(
+        reservations.filter((result) => result.status === 'fulfilled').length,
+        1,
+      );
+      const restarted = new TrafficProtection(
+        new DatabaseProtectionStore(pool),
+        policy,
+      );
+      assert.equal((await restarted.snapshot()).events.length, 1);
     } finally {
       await pool.end();
     }

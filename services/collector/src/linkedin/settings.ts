@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { z } from 'zod';
+import { protectionPolicySchema } from './protection.js';
 import { LinkedInError } from './errors.js';
 
 const cookie = z
@@ -22,6 +23,9 @@ const sessionSchema = z.object({
 export type Session = z.infer<typeof sessionSchema>;
 export const settingsSchema = z
   .object({
+    protection: protectionPolicySchema.default(() =>
+      protectionPolicySchema.parse({}),
+    ),
     sessionFile: z.string().min(1),
     jobsKeywords: z.array(z.string().min(1).max(300)).max(12).default([]),
     jobsIntervalMs: z.number().int().min(300000).max(86400000).default(900000),
