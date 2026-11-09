@@ -276,3 +276,62 @@ test('A slower protected Jobs poll prioritizes unseen cards over old top results
   await source.fetchPosts();
   assert.deepEqual(details, ['/jobs-guest/jobs/api/jobPosting/12345672']);
 });
+
+test('A disabled Next control proves the last search page without a coverage warning', async () => {
+  const config = settingsSchema.parse({
+    sessionFile: 'offline',
+    keywords: ['frontend'],
+    searchPathTemplate: '/search/results/content/?keywords={keywords}',
+    maxPages: 3,
+  });
+  const client = new LinkedInClient(session, 0, async () =>
+    html(
+      card(id(), 'Ищем Frontend разработчика в нашу команду') +
+        '<button aria-label="Next" disabled>Next</button>',
+    ),
+  );
+  const pages = [];
+  for await (const page of new GlobalPostSearch(client, config).pages(
+    'frontend',
+    new Set(),
+  ))
+    pages.push(page);
+  assert.equal(pages.length, 1);
+  assert.equal(pages[0]!.coverageLimited, false);
+  assert.equal(pages[0]!.pagination, 'end');
+});
+test('No pagination control is unknown, not evidence that more pages definitely exist', async () => {
+  const config = settingsSchema.parse({
+    sessionFile: 'offline',
+    keywords: ['frontend'],
+    searchPathTemplate: '/search/results/content/?keywords={keywords}',
+    maxPages: 3,
+  });
+  const client = new LinkedInClient(session, 0, async () =>
+    html(card(id(), 'Ищем Frontend разработчика в нашу команду')),
+  );
+  const pages = [];
+  for await (const page of new GlobalPostSearch(client, config).pages(
+    'frontend',
+    new Set(),
+  ))
+    pages.push(page);
+  assert.equal(pages[0]!.coverageLimited, true);
+  assert.equal(pages[0]!.pagination, 'unknown');
+});
+test('A malformed first next link does not hide a valid second next link', async () => {
+  const { nextSearchLink } =
+    await import('../services/collector/src/linkedin/pagination.js');
+  assert.equal(
+    nextSearchLink(
+      '<a rel="next" href="https://evil.test/search">Next</a><a rel="next" href="/search/results/content/?page=2">Next</a>',
+    ),
+    '/search/results/content/?page=2',
+  );
+  assert.equal(
+    nextSearchLink(
+      '<a rel="next" aria-disabled="true" href="/search/results/content/?page=2">Next</a>',
+    ),
+    undefined,
+  );
+});

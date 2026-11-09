@@ -1,6 +1,11 @@
 import { decodeHtmlPage } from './search-html.js';
 import { decodeFeedPage } from './feed-pages.js';
-import { continuation, nextSearchLink } from './pagination.js';
+import {
+  continuation,
+  nextSearchLink,
+  searchPaginationState,
+  type SearchPaginationState,
+} from './pagination.js';
 import type { Post } from '../../../../packages/contracts/src/index.js';
 import { LinkedInClient } from './client.js';
 import { decodeSearch } from './search.js';
@@ -47,6 +52,7 @@ export class GlobalPostSearch {
     skippedKnown: number;
     coverageLimited?: boolean;
     skippedNoText?: number;
+    pagination?: SearchPaginationState;
   }> {
     let start = 0;
     let hydrated = 0;
@@ -191,10 +197,14 @@ export class GlobalPostSearch {
       const next = continuation(body, !stream, 'search', after);
       const link = !stream ? nextSearchLink(body) : undefined;
       const key = next?.body ?? link;
+      const pagination = stream
+        ? key
+          ? ('continuation' as const)
+          : ('unknown' as const)
+        : searchPaginationState(body, !!key);
       const coverageLimited =
         decoded.posts.length > 0 &&
-        page === 0 &&
-        !key &&
+        pagination === 'unknown' &&
         this.settings.maxPages > 1;
       yield {
         posts,
@@ -203,6 +213,7 @@ export class GlobalPostSearch {
         skippedKnown: 0,
         skippedNoText: decoded.skippedNoText,
         coverageLimited,
+        pagination,
       };
       if (!key || visited.has(key) || page + 1 >= this.settings.maxPages) break;
       visited.add(key);

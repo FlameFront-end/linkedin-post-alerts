@@ -24,6 +24,8 @@ interface TargetReport {
   posts: number;
   coverageLimited?: boolean;
   budgetLimited?: boolean;
+  pagination?: 'continuation' | 'end' | 'unknown';
+  discovered?: number;
 }
 const HEALTHY = new Set(['ok', 'partial']);
 
@@ -34,14 +36,7 @@ export class LinkedInSource implements PostSource {
   private disabled = new Map<number, number>();
   private cycle = 0;
   private deepCycle = 0;
-  reports: {
-    index: number;
-    kind: 'author' | 'keyword' | 'feed';
-    status: string;
-    posts: number;
-    coverageLimited?: boolean;
-    budgetLimited?: boolean;
-  }[] = [];
+  reports: TargetReport[] = [];
   onPage?: (report: {
     index: number;
     kind: string;
@@ -149,6 +144,7 @@ export class LinkedInSource implements PostSource {
         failedDetails: number;
         skippedKnown: number;
         skippedNoText?: number;
+        pagination?: 'continuation' | 'end' | 'unknown';
         coverageLimited?: boolean;
       },
     ) => {
@@ -158,6 +154,8 @@ export class LinkedInSource implements PostSource {
           Date.now() - this.settings.maxAgeHours * 3600000,
       );
       report.posts += fresh.length;
+      report.discovered = (report.discovered ?? 0) + batch.discovered;
+      if (batch.pagination) report.pagination = batch.pagination;
       if (batch.failedDetails) report.status = 'partial';
       report.coverageLimited ||= batch.coverageLimited ?? false;
       this.onPage?.({

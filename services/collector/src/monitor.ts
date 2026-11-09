@@ -46,6 +46,7 @@ export class SourceMonitor {
       posts: number;
       discovered?: number;
       coverageLimited?: boolean;
+      pagination?: string;
     }[],
     newPosts: number,
     error?: string,
@@ -92,6 +93,10 @@ export class SourceMonitor {
       coverageLimited,
       failedTargets,
       targets: reports.map((report) => ({
+        ...(report.pagination ? { pagination: report.pagination } : {}),
+        ...(report.discovered !== undefined
+          ? { discovered: report.discovered }
+          : {}),
         status: report.status,
         posts: report.posts,
       })),
@@ -133,10 +138,10 @@ export class SourceMonitor {
         code: `${name}_degraded`,
         message: `${name}: часть запросов регулярно не работает (${failedTargets} из ${reports.length}). Проверьте /status и журнал target_result.`,
       });
-    if (coverageLimited)
+    if (coverageLimited && !previous?.coverageLimited)
       await raiseAlert(this.db, {
         code: `${name}_coverage_limited`,
-        message: `${name}: LinkedIn не отдал поддерживаемое продолжение поиска. Получена только первая страница; полный охват не подтверждён.`,
+        message: `${name}: страницы поиска получены, но продолжение не распознано. Это не блокировка: возможны конец выдачи или неподдерживаемый формат пагинации. Доступные посты обрабатываются, лента продолжает работать. Подробности — в /status.`,
       });
   }
   async diagnostics() {
