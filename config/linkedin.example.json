@@ -52,5 +52,5 @@
     "searchHourlyRequests": 4,
     "searchDailyRequests": 20
   },
-  "feedDeepIntervalMs": 1800000
+  "feedDeepIntervalMs": 900000
 }

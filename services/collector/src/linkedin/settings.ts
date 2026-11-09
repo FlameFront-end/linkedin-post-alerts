@@ -37,9 +37,9 @@ export const settingsSchema = z
     feedDeepIntervalMs: z
       .number()
       .int()
-      .min(1800000)
+      .min(900000)
       .max(86400000)
-      .default(1800000),
+      .default(900000),
     personalFeedLoadMore: z.number().int().min(0).max(20).default(2),
     authorUrns: z
       .array(z.string().regex(/^urn:li:fsd_profile:[A-Za-z0-9_-]+$/))

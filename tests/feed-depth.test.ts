@@ -11,19 +11,19 @@ test('Frequent feed refresh does not repeat deep pagination and survives restart
       saved = value;
     },
   };
-  const schedule = new FeedDepthSchedule(1800000, state, () => now);
-  for (let i = 0; i < 6; i++) {
+  const schedule = new FeedDepthSchedule(900000, state, () => now);
+  for (let i = 0; i < 3; i++) {
     assert.equal(await schedule.due(), false);
     now += 300000;
   }
-  const restarted = new FeedDepthSchedule(1800000, state, () => now);
+  const restarted = new FeedDepthSchedule(900000, state, () => now);
   assert.equal(await restarted.due(), true);
   assert.equal(await restarted.due(), false);
   assert.equal(
-    await new FeedDepthSchedule(1800000, state, () => now).due(),
+    await new FeedDepthSchedule(900000, state, () => now).due(),
     false,
   );
-  now += 1800000;
+  now += 900000;
   assert.equal(await restarted.due(), true);
 });
 test('Feed frequency is independent from post search and Jobs', () => {
