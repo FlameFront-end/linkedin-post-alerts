@@ -1,3 +1,5 @@
+> Historical engineering record. For current setup and behavior, see [the documentation index](README.md) and [production guide](PRODUCTION.md).
+
 # Актуализация
 
 HTTP-адаптер LinkedIn добавлен после первого каркаса. Живая проверка ожидает сессию.
@@ -7,7 +9,7 @@ HTTP-адаптер LinkedIn добавлен после первого карк
 
 # Передача проекта: LinkedIn Post Alerts
 
-Проект: `/Users/artem/Development/fullstack/linkedin-post-alerts`.
+Проект: `<project-root>`.
 
 ## Что готово
 

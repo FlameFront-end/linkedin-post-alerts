@@ -1,10 +1,14 @@
 name: checks
 on: [push, pull_request]
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17-alpine
@@ -26,7 +30,12 @@ jobs:
       - run: npm run typecheck
       - run: npm run format:check
       - run: npm test
+      - name: Create second disposable integration database
+        run: node --input-type=module -e "import pg from 'pg'; const c = new pg.Client({connectionString:process.env.TEST_DATABASE_URL}); await c.connect(); await c.query('CREATE DATABASE alerts_functional_test'); await c.end();"
+        env:
+          TEST_DATABASE_URL: postgres://alerts:alerts@localhost:5432/alerts_test
       - run: npm run test:integration
         env:
           TEST_DATABASE_URL: postgres://alerts:alerts@localhost:5432/alerts_test
+          TEST_FUNCTIONAL_DATABASE_URL: postgres://alerts:alerts@localhost:5432/alerts_functional_test
       - run: npm run build

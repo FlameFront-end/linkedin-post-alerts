@@ -1,3 +1,5 @@
+> Historical engineering record. For current setup and behavior, see [the documentation index](README.md) and [production guide](PRODUCTION.md).
+
 # Функциональное ревью — 8 ноября 2026
 
 Проверена версия `1e648ba`: поведение фильтров, охват источников, задержка, уведомления. Код не менялся. Проверки с подставными HTTP-ответами выполнялись локально, без запросов к LinkedIn и Telegram. Это проверка конкретных сценариев, а не измерение полноты поиска на реальной выдаче.

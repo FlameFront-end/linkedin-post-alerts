@@ -1,102 +1,48 @@
-# Актуальный основной режим
+# LinkedIn adapter
 
-Глобальный поиск по keywords, без списка рекрутеров: `GLOBAL_SEARCH.md`.
-Добавлены декодер поисковых карточек и отдельная загрузка полного текста.
-Флаг experimentalKeywordSearch больше не требуется. Живые запросы ещё не проверены.
-Ниже исторические инструкции сессии/авторских лент; прежние указания
-«первый запуск только по авторам» заменены глобальным dry-run.
+The collector uses HTTP requests rather than browser automation. It depends on undocumented, account-accessible response formats and may stop working when LinkedIn changes them. [Production setup](PRODUCTION.md) covers deployment; [traffic protection](TRAFFIC_PROTECTION.md) covers quotas and recovery.
 
-# LinkedIn: подключение сессии
+## Session
 
-## Текущий статус
+Copy `config/session.example.json` to `.local/session.json` and set mode `600`. Populate locally:
 
-HTTP-адаптер реализован, Playwright и сторонние платные сборщики не используются.
-На реальном аккаунте НЕ проверен: сессия пользователя ещё не предоставлена.
-Тестовые ответы синтетические, основаны на известной структуре UpdateV2.
+| Field        | Meaning                                             |
+| ------------ | --------------------------------------------------- |
+| `liAt`       | Browser `li_at` cookie                              |
+| `jsessionId` | Browser `JSESSIONID` cookie                         |
+| `csrfToken`  | Optional explicit CSRF header from the same session |
+| `userAgent`  | Optional actual User-Agent of that browser session  |
 
-Реализованы глобальный поиск по keywords (основной режим, см. GLOBAL_SEARCH.md) и,
-дополнительно, запрос постов по profile URN. Порядок первого запуска — PRODUCTION.md.
-Для поиска нет встроенного «проверенного» queryId: старые Voyager-варианты ломались.
-Нужно снять текущий запрос **Posts**, отсортированных по свежести, с аккаунта пользователя.
-Если ответ содержит только карточки поиска, а не UpdateV2 с текстом, декодер остановится;
-тогда потребуется адаптировать декодер/добавить hydration, а не объявлять поиск успешным.
+Only collector receives the session mount. Host checks are fixed, redirects are not followed and headers/session values are not logged. Never attach a raw account page or session file to a public issue.
 
-## Когда будет сессия
+## Configuration
 
-Из корня репозитория:
+Start from `config/linkedin.example.json`:
 
-```sh
-mkdir -p .local
-cp config/linkedin.example.json .local/linkedin.json
-cp config/session.example.json .local/session.json
-chmod 600 .local/session.json
-```
+- `personalFeed`: refresh the personal feed. `personalFeedLoadMore` bounds additional pages.
+- `feedDeepIntervalMs`: separate schedule for deeper pagination, default 15 minutes.
+- `keywords`: post search queries. Set `searchPathTemplate` when the list is non-empty.
+- `searchPathTemplate`: a current relative Posts request path, captured from your account. HTML paths start `/search/results/content/?` and require `{keywords}`. Voyager paths require `{keywords}`, `{start}` and `{count}`.
+- `postPathTemplate`: relative detail request, using `{urn}` or `{slug}`. A historical query ID is not evidence that an endpoint still works.
+- `authorUrns`: optional profile URNs. A recruiter list is not required for feed/global search.
+- `jobsKeywords`: optional native Jobs queries. Remove entries to omit that source.
+- `protection`: bounded application policy; all sources share these rolling limits.
 
-Заполнить `.local/session.json` локально: `liAt` и `jsessionId` — значения cookies
-`li_at` и `JSESSIONID`. Пароль не нужен. Не передавать cookies через чат.
-При несовпадении CSRF можно явно задать `csrfToken`: скопированный заголовок запроса.
-Опционально `userAgent` задаёт фактический User-Agent браузера сессии. По умолчанию csrf-token — JSESSIONID без внешних кавычек, `ajax:` сохраняется.
-Файл должен иметь права 600; читается только collector. При обновлении сессии collector перезапустить.
+Choose Posts, freshness sorting and a time window in the ordinary interface when capturing search configuration. Do not include session or authentication values in the path. There is deliberately no baked-in private query ID advertised as stable.
 
-В `.local/linkedin.json` указать `authorUrns`: массив `urn:li:fsd_profile:...`.
-Это внутренний URN, не URL/slug профиля. Его получение по public URL пока не автоматизировано.
-Для keyword search добавить `keywords` и `searchPathTemplate`.
+## Response handling
 
-`searchPathTemplate` — относительный путь `/voyager/api/...` с текущим queryId и параметрами,
-в котором значения ключевого слова, offset и count заменены на `{keywords}`, `{start}`, `{count}`.
-Внешний host и redirects запрещены. Шаблон должен уже содержать актуальные фильтры Posts,
-сортировку по дате и временное окно. Готовый URL с cookie/токеном не сохранять.
-Плейсхолдеры подставляются с percent-encoding. Не использовать старый queryId как доказательство работоспособности.
+Supported surfaces include normalized Voyager collections, HTML post cards and recognized streaming pagination responses. Reposts preserve available original text. Media images may be forwarded to OCR when a usable identity and URL are available. A partial text is marked and may be hydrated within budget.
 
-Проверка без БД и без Telegram:
+Feed pagination and HTML search continuation replay only recognized server-issued instructions or same-host next links. A disabled Next control means the end of results; no recognized control means unknown coverage. Unsupported formats are reported rather than silently counted as a successful empty response.
+
+Publication time comes from response data or a timestamp encoded in the post ID where applicable. Jobs dates can have day precision and are shown without invented hours.
+
+## Diagnostics
 
 ```sh
-npm run linkedin:check
+npm run linkedin:check                 # Saved state only; no LinkedIn request
+npm run linkedin:check -- --probe feed # One explicitly requested, protected check
 ```
 
-Выводит только статус и число свежих постов, не cookies/тексты.
-Для локального collector поставить `SOURCE_MODE=linkedin` в `.env`, затем `npm run build`
-и `npm run start:collector`. Telegram пока оставить dry-run.
-
-В Docker с read-only mount только для collector:
-
-```sh
-LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose -f compose.yaml -f compose.linkedin.yaml up --build -d
-```
-
-## Границы и поведение
-
-- Сначала явный авторский feed, затем keyword targets. Запросы последовательные, от 2 сек между стартами по умолчанию.
-- Страницы передаются в очередь по мере получения; ошибка поздней страницы не теряет уже записанные.
-- На каждом цикле заново просматривается ограниченное окно, дубли удаляет БД. Durable cursor пока нет.
-- `pageSize` 1–50, `maxPages` 1–10, всего до 50 авторов и 20 keywords. Достижение лимита может оставить непросмотренный хвост.
-- `maxAgeHours` 1–168, default 24. Это локальный фильтр после получения, не гарантия полноты поиска.
-- Ответ ограничен 4 MiB; запрос — 15 секунд; остановка процесса прерывает запрос/ожидание.
-- Редирект на вход, 401/403/999: источник останавливает запросы до перезапуска с обновлённой сессией.
-- 429: pause по Retry-After (60 сек – 24 часа), без повторов в обход ограничения.
-- Неизвестный формат/FeedbackCard-only: ошибка и отключение только конкретной цели до исправления/перезапуска. Остальные цели продолжают работать.
-- Empty collection допустима только с согласованной paging-информацией. Сам по себе HTTP 200 не успех.
-- Источник сообщает неготовность health/readiness при auth/format failure и во время cooldown.
-- Публикации читаются только по ссылкам из возвращённой коллекции; unrelated included[] не сканируется как источник постов.
-- `publishedAt` берётся из createdAt, а при его отсутствии вычисляется из activity ID через shift 22.
-  Время публикации в этом случае выведено из идентификатора; корректность проверим на живом ответе.
-- Сохраняется canonical activity URL. Смысловые дубли, редактирования и репосты остаются отдельной задачей.
-
-## Что проверить после входа
-
-1. Авторский feed возвращает реальные посты и верные даты/тексты.
-2. Keyword search возвращает посты; при необходимости добавить hydration карточек.
-3. Обработка пустого результата, pagination и сортировка соответствуют реальному ответу.
-4. Измерить publishedAt → firstSeenAt на известных свежих публикациях.
-
-Источники формы запросов (не гарантия актуальности):
-
-- https://github.com/bcharleson/linkedincli/blob/main/src/commands/profile/view.ts
-- https://github.com/bcharleson/linkedincli/issues/2
-- https://github.com/vicnaum/linkedin-toolkit/blob/main/references/endpoints.md
-
-## После независимого ревью
-
-Полный список исправлений и оставшихся ограничений: `REVIEW_RESPONSE.md`.
-Авторская пагинация использует metadata.paginationToken; без него после первой страницы останавливается.
-Ошибки отдельных целей не прерывают другие цели. Метрики CLI выводятся отдельно по целям.
+The database connection is required so diagnostics cannot bypass the shared budget. See the protection guide for confirmed probes after an actual restriction. Parser changes should be tested with synthetic/sanitized fixtures first.

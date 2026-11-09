@@ -1,91 +1,35 @@
-# Глобальный поиск вакансий в постах LinkedIn
+# Discovering vacancies in posts
 
-## Основной режим
+No recruiter list is required. The personal feed and keyword search are complementary: the feed is personalized, while Posts search discovers account-visible results across queries. Neither provides complete coverage of LinkedIn.
 
-Список рекрутеров больше не требуется. Основной поток:
+## Discovery pipeline
 
-Набор поисковых запросов → поисковые карточки постов → загрузка полного текста →
-фильтрация Frontend/DevOps → дедупликация → Telegram.
+1. Refresh the feed top on its own schedule, with deeper pages on a slower schedule.
+2. Rotate configurable Posts queries. Check fresh first pages before spending remaining budget on deeper results.
+3. Normalize IDs, available text, dates and author metadata. Where supported, hydrate incomplete text and preserve repost content.
+4. Persist observations and new post versions in the durable queue.
+5. Classify each position, optionally extract image text, deduplicate vacancies and notify Telegram.
 
-В config/linkedin.example.json уже есть начальный набор русских и английских названий ролей.
-`authorUrns` пустой, отслеживание авторов — необязательное дополнение.
-Поиск не имеет фильтра «только моя сеть» или списка авторов в коде; фактическую область
-выдачи определяют захваченный запрос и доступность постов для аккаунта.
+The current live matching profile is frontend/full-stack/interface-related work with Russian text or mandatory Russian. DevOps is excluded. This profile is implemented in `packages/contracts/src/`; it is heuristic rather than an AI relevance score.
 
-## Что реализовано
+## Search configuration
 
-- Декодер кластеров SearchClusterViewModel и карточек EntityResultViewModel,
-  включая ссылки на объекты через included[]. Обход всех кластеров в коллекции.
-- Из карточки берётся только ссылка/URN. summary никогда не считается текстом вакансии.
-- По каждой новой ссылке отдельно запрашивается полный пост (hydration).
-- Декодер полного поста поддерживает updateMetadata.urn и metadata.backendUrn,
-  формы activity/ugcPost/share, текст и автора, включая репосты.
-- Пагинация поиска идёт по server paging.start/count, а не количеству кластеров.
-- Ограничение страниц и detail-запросов на каждый поисковый запрос.
-- Дедупликация ссылок между запросами за один цикл. Кеш полных постов на 10 минут,
-  максимум 1000 записей, уменьшает повторные запросы.
-- Кеш хранит сами посты: при ошибке записи в БД следующий цикл выдаст их снова,
-  а не потеряет из-за отметки «уже видел». Долговечную дедупликацию обеспечивает очередь БД.
-- Ошибка одной цели не останавливает другие; общая потеря доступа или 429 останавливают HTTP.
-- Удалённые, недоступные или нечитаемые посты дают partial, без подмены текстом сниппета.
-  Запрос отключается, только если ни один ответ с постом не разбирается (3+ подряд).
-- Пост сопоставляется с карточкой по любому своему URN; ключ дедупликации — activity URN.
-- Перед загрузкой collector проверяет очередь в БД: обработанные посты повторно не запрашиваются.
-- Жёсткий лимит `maxRequestsPerCycle` на цикл; стартовый запрос ротируется между циклами.
+`keywords` and `searchPathTemplate` live in `.local/linkedin.json`. Use a current request from the Posts interface; query IDs and server formats can change. The [adapter guide](LINKEDIN_ADAPTER.md) documents supported paths and placeholders.
 
-## Что нужно при подключении сессии
+Normalized search cards are discovery references: summaries are not treated as complete vacancy descriptions. HTML cards include available text directly; truncated text is marked and hydrated when supported and within budget.
 
-Cookies остаются в `.local/session.json`, как описано в LINKEDIN_ADAPTER.md.
-В `.local/linkedin.json` добавить актуальный `searchPathTemplate`, снятый с запросов браузера
-в разделе **Posts**, с сортировкой **Latest** и окном за последние сутки.
-Он должен содержать `{keywords}`, `{start}`, `{count}`; их код подставляет автоматически.
-В шаблоне не должно быть ограничений по авторам, компаниям или сети.
+## Pagination and coverage
 
-Старый заведомо неработающий queryId в проект не зашит. Без актуального запроса
-настройка завершается ошибкой, а не делает вид, что глобальный поиск уже работает.
-Шаблон поддерживает GET Voyager; если аккаунту выдаётся новая POST/SDUI схема,
-для неё потребуется отдельная реализация по живому запросу.
+- Normalized responses use server paging metadata.
+- HTML/streaming responses use supported server continuations or validated same-host next links.
+- An explicit disabled Next control marks the end of results.
+- No recognized continuation means **unknown coverage**, not proof that more results exist or that collection is complete.
+- Per-cycle budgets and persistent quotas can stop a run even when more pages exist. This is expected protective behavior.
 
-Для полного поста есть `postPathTemplate`, по умолчанию `/voyager/api/feed/updates/{urn}`.
-Этот путь является непроверенным кандидатом до live-прогона, не обещанием актуальности.
-Можно заменить его текущим GraphQL-запросом с `{urn}` или `{slug}`, снятым при открытии поста.
-Шаблоны ограничены www.linkedin.com/voyager/api; cookies не отправляются на внешние URL.
-Значения плейсхолдеров кодируются один раз. Если захваченный запрос требует двойной
-вложенной кодировки, его необходимо адаптировать по реальному контракту до запуска.
+The `/status` endpoint and JSONL logs report target status, discovered cards and available pagination state. Account restrictions are separate from coverage warnings. Do not increase requests or guess pagination tokens to conceal a missing parser.
 
-Запуск проверки: `npm run linkedin:check`.
-Она покажет счётчики по запросам и длину/дату образцов, без публикации текста и сессии.
-Порядок первого запуска с низкими лимитами — PRODUCTION.md. Рекрутеры не нужны.
+## Optional native Jobs
 
-## Не подтверждено без сессии
+Jobs uses public guest endpoints without member cookies, but participates in the same traffic protection budget. It prioritizes unseen cards, performs bounded refreshes and defers unavailable cards. A Jobs 429 places that source on hold until explicit recovery; the shared cooldown is still respected.
 
-Живая работоспособность endpoint/queryId, точный формат текущей выдачи, пагинация,
-корректность времён и полнота текста. Тесты используют синтетические ответы.
-Полного охвата LinkedIn нет: получаем только посты, доступные поиску аккаунта.
-Количество запросов и цикл ограничены; при большом потоке часть выдачи может не поместиться.
-Постоянного поискового cursor пока нет, каждый цикл начинается со свежих результатов.
-Кеш переживает циклы внутри процесса, но не перезапуск. Обновления уже обработанных постов
-всё ещё не переотправляются. Алиасы activity/share/ugcPost с разными ID не объединяются наугад.
-
-## Почему нельзя зашить старый endpoint
-
-В публичном linkedincli поиск CONTENT уже отключён из-за FeedbackCard-only ответов.
-Новый текущий запрос нельзя достоверно получить из тестовой фикстуры.
-После входа надо воспроизвести именно запрос Posts и сверить полученные публикации с интерфейсом.
-Источники исследования записаны в LINKEDIN_ADAPTER.md; сетевых вызовов к аккаунту здесь не было.
-
-## Релевантность и LinkedIn Jobs
-
-Включены обычные вакансии через jobsKeywords. Два запроса из списка обходятся по кругу
-при каждом запуске Jobs, с интервалом минимум jobsIntervalMs (по умолчанию 5–15 минут).
-В рабочей конфигурации пять минут, три полных описания на запрос и окно семь дней.
-Фактический интервал зависит от продолжительности цикла постов и пауз провайдера.
-Для постов рабочее окно расширено до 72 часов.
-
-Подходят русский текст или явное обязательное владение русским. Упоминание страны,
-офиса или желательного русского не даёт допуска англоязычной вакансии.
-Этот отбор основан на правилах, возможны пропуски сложных формулировок.
-Telegram показывает метку «Русский обязателен» и отличает обычную вакансию от поста.
-Публичные Jobs-запросы используют отдельный клиент без cookies и отдельную паузу после 429.
-Получаются только первые карточки каждой выдачи. Date posted в Jobs может иметь
-точность до дня, в отличие от даты activity в постах.
+See [production setup](PRODUCTION.md), [traffic protection](TRAFFIC_PROTECTION.md) and [logging](LOGGING.md).

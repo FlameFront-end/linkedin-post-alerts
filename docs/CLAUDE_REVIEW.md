@@ -1,3 +1,5 @@
+> Historical engineering record. For current setup and behavior, see [the documentation index](README.md) and [production guide](PRODUCTION.md).
+
 # Ревью: linkedin-post-alerts (2026-11-05)
 
 Проверено: код всех трёх сервисов, очередь, миграция, конфигурация, Docker/Compose, тесты.

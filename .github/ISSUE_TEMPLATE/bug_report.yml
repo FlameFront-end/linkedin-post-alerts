@@ -1,0 +1,31 @@
+name: Bug report
+description: Report incorrect behavior with a reproducible, sanitized example.
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: Do not include cookies, tokens, personal messages or raw LinkedIn account captures. Report vulnerabilities privately using SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Prefer synthetic data and a minimal example.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant sanitized diagnostics
+      description: Include event names and error codes; remove account data and credentials.

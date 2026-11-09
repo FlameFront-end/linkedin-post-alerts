@@ -1,3 +1,5 @@
+> Historical engineering record. For current setup and behavior, see [the documentation index](README.md) and [production guide](PRODUCTION.md).
+
 # Открытые вопросы и ограничения
 
 ## Блокирует реальный сбор

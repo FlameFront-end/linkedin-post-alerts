@@ -1,3 +1,5 @@
+> Historical engineering record. For current setup and behavior, see [the documentation index](README.md) and [production guide](PRODUCTION.md).
+
 # Повторная проверка после исправлений и глобального поиска (2026-11-06)
 
 Проверены коммиты `9f57fca`…`0587285`, то есть исправления К1–К4 и глобальный поиск.

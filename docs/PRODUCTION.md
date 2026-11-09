@@ -1,83 +1,84 @@
-# Production: запуск и эксплуатация
+# Live setup and operations
 
-## Статус готовности
+Start with the offline demo and mock Compose stack in the [README](../README.md). This guide enables real sources. The LinkedIn adapter is experimental and can encounter account restrictions or response-format changes.
 
-Код доведён до эксплуатационного вида: изоляция сбоев, лимиты запросов,
-оповещения владельцу, очистка данных, healthchecks, прод-конфигурация Compose.
+## 1. Prepare local files
 
-**Работа с реальным LinkedIn не подтверждена.** Запрос поиска Posts, запрос полного поста
-и форма их ответов проверены только на синтетических ответах. Пока не пройден шаг 3
-ниже, сервис нельзя считать работающим.
+```sh
+npm ci
+cp .env.example .env
+npm run logs:init
+cp config/linkedin.example.json .local/linkedin.json
+cp config/session.example.json .local/session.json
+chmod 600 .local/session.json
+```
 
-## Порядок первого запуска
+Fill `.local/session.json` locally with `liAt` and `jsessionId`, corresponding to the browser cookies `li_at` and `JSESSIONID`. The optional `csrfToken` and `userAgent` must match the same session. Do not share these values or commit captured responses.
 
-1. **Сессия.** `.local/session.json` по `LINKEDIN_ADAPTER.md`: `liAt`, `jsessionId`, а также
-   `userAgent` — значение того же браузера, из которого взяты cookies. Права `chmod 600`.
-2. **Запросы.** В `.local/linkedin.json` (копия `config/linkedin.example.json`):
-   - `searchPathTemplate` — текущий GET-запрос вкладки **Posts** с сортировкой Latest
-     (DevTools → Network), с `{keywords}`, `{start}`, `{count}`;
-   - при необходимости `postPathTemplate` — запрос, который выполняется при открытии поста,
-     с `{urn}` или `{slug}`.
-     Если поиск идёт POST- или SDUI-запросом, текущий транспорт не подходит: нужна доработка
-     по живому запросу.
-3. **Проверка без БД и Telegram.** Для первого раза в `.local/linkedin.json` оставить
-   1 запрос, `maxDetailsPerQuery: 3`, `maxRequestsPerCycle: 5`:
-   ```sh
-   npm run linkedin:check
-   ```
-   Ожидается `status: ok`, у образцов `authorPresent: true`, `textLength` больше длины
-   сниппета, `publishedAt` совпадает с датой поста в интерфейсе. Открыть 2–3 поста вручную
-   и сверить. При `failed` прод не запускать.
-4. **Dry-run на сутки.** Вернуть рабочие лимиты, в `.env` указать `POLL_INTERVAL_MS=900000`,
-   `TELEGRAM_MODE=dry-run`, затем выполнить команду из раздела ниже. Проверить
-   `target_result` в логах collector, распределение решений в `processing.posts` и отсутствие
-   429/999.
-5. **Live Telegram.** В `.env`: `TELEGRAM_MODE=live`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
-   (бот добавлен в чат). Перезапустить notifier.
-   Уведомления, завершённые в dry-run, повторно не отправляются.
+Configure `.local/linkedin.json` using the [adapter guide](LINKEDIN_ADAPTER.md). For the feed, set `personalFeed: true`. If keyword search is configured, `searchPathTemplate` must match the current Posts request visible to your account. Remove keyword entries if you want a feed-only deployment.
 
-## Запуск в Docker
+## 2. Configure the environment
+
+Set these values in `.env`:
+
+```dotenv
+SOURCE_MODE=linkedin
+TELEGRAM_MODE=dry-run
+POLL_INTERVAL_MS=1800000
+FEED_POLL_INTERVAL_MS=300000
+COLLECTION_PAUSED=true
+TELEGRAM_BOT_TOKEN=YOUR_LOCAL_BOT_TOKEN
+TELEGRAM_CHAT_ID=YOUR_LOCAL_CHAT_ID
+```
+
+The production overlay requires a Telegram token and chat ID even when dry-run is selected. Alternatively, start with the base and LinkedIn overlays only; workers remain in mock/dry-run configuration until the production overlay is added.
+
+Use development Compose credentials only on a private local host. Do not expose the database or `/status` publicly. The base stack uses PostgreSQL user/password/database `alerts`; configure all database connections consistently if changing those credentials.
+
+## 3. Start the paused stack
 
 ```sh
 LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose \
   -f compose.yaml -f compose.linkedin.yaml -f compose.prod.yaml up --build -d
-docker compose ps
 ```
 
-`compose.prod.yaml` переводит notifier в режим из `.env` (по умолчанию live) и требует токен
-с chat ID. Postgres слушает только `127.0.0.1`. Пароль базы в Compose локальный: если хост
-доступен другим, задайте свой пароль до создания volume.
+File logs are mounted under `.local/logs/`. The collector exposes `http://localhost:3101/status`; readiness is intentionally unavailable while collection is paused. Workers and OCR have independent health checks.
 
-## Что сервис делает сам
+## 4. Check one source
 
-| Ситуация                                         | Поведение                                                                  |
-| ------------------------------------------------ | -------------------------------------------------------------------------- |
-| Сессия истекла (редирект/401/403/999)            | Сбор останавливается, в Telegram приходит ⚠️ `auth_required` (раз в сутки) |
-| 429 от LinkedIn                                  | Пауза по Retry-After, ⚠️ `rate_limited`                                    |
-| Все поисковые запросы не работают                | ⚠️ `collection_failing` с кодами ошибок                                    |
-| Один пост удалён или нечитаем                    | Пропускается, запрос получает статус `partial` и продолжает работать       |
-| Ответ ни на один пост не разбирается (3+ подряд) | Отключается только этот запрос до перезапуска                              |
-| Пост уже был обработан                           | Не запрашивается повторно (проверка по БД)                                 |
-| Лимит `maxRequestsPerCycle` исчерпан             | Цикл завершается, следующий начинает со следующего запроса                 |
-| Неверный токен или чат Telegram                  | Отправка останавливается, очередь сохраняется до исправления и перезапуска |
-| Старые данные                                    | Раз в час удаляются завершённые задания и решения старше `RETENTION_DAYS`  |
+`npm run linkedin:check` reads saved protection state from PostgreSQL and does **not** contact LinkedIn. `.env` must point to the same database as the collector; the local example uses `localhost:55432`.
 
-Оповещения идут через того же Telegram-бота. Если сломан сам Telegram, их получить
-нельзя: контролируйте `docker compose ps` (статус unhealthy).
+When no restriction is active, one protected feed request can be made explicitly:
 
-## Регулярное обслуживание
+```sh
+npm run linkedin:check -- --probe feed
+```
 
-- Cookie `li_at` периодически истекает. После ⚠️ `auth_required` обновите `.local/session.json`
-  и выполните `docker compose restart collector`.
-- После изменения `.local/linkedin.json` перезапустите collector.
-- Выполните `npm run queue:replay -- notification ID`, чтобы посмотреть `dead`-задание, и
-  добавьте `--apply`, чтобы вернуть его в очередь.
+For keyword search use `--probe search`. A successful empty response is a valid transport/parser check, not proof that the chosen query finds suitable vacancies. Compare sample dates/text against the ordinary interface before relying on a new adapter configuration.
 
-## Известные ограничения
+If there is a saved restriction, follow [traffic protection and recovery](TRAFFIC_PROTECTION.md). Only use a confirmed probe after the owner has verified that the same surface works normally in the browser. Neither a restart nor a diagnostic command resets budgets or cooldowns.
 
-- Полного охвата LinkedIn нет: только то, что отдаёт поиск аккаунта, в пределах лимитов.
-- Авторизованный сбор противоречит правилам LinkedIn; возможны ограничения аккаунта.
-- Доставка at-least-once: при сбое между отправкой и фиксацией в БД возможен дубль.
-- Один пост, найденный как ugcPost и как activity без общей связки в ответе, может дать два уведомления.
-- Классификатор — эвристика без корпуса реальных примеров.
-- Один экземпляр notifier и collector (общего rate limiter нет).
+## 5. Enable collection, then delivery
+
+After a successful protected check, set `COLLECTION_PAUSED=false` and recreate collector:
+
+```sh
+LOCAL_UID=$(id -u) LOCAL_GID=$(id -g) docker compose \
+  -f compose.yaml -f compose.linkedin.yaml -f compose.prod.yaml \
+  up -d --no-deps --force-recreate collector
+```
+
+Review `.local/logs/`, `/status` and `npm run logs:report`. Dry-run deliveries acknowledge notification jobs; they will not automatically be resent after switching to live delivery.
+
+To enable Telegram, set `TELEGRAM_MODE=live` and recreate notifier with the same Compose overlays. The bot must be able to send to the configured chat. Incorrect credentials pause delivery and preserve the backlog.
+
+## Recovery and limitations
+
+- Native Jobs is optional and uses public guest endpoints without member cookies. After a 429 it is held until explicit recovery; feed and post search may resume after the shared cooldown.
+- Unknown HTML/stream formats can stop a source. Fix parsing against a sanitized fixture rather than repeatedly probing LinkedIn.
+- Partial search pagination is reported; it does not mean that the account is blocked.
+- Review old jobs using `npm run queue:replay -- notification ID` and apply deliberately with `--apply` when appropriate.
+- Retention removes completed history after `RETENTION_DAYS`; default 30 days. PostgreSQL volume persists across ordinary restarts.
+- Delivery is at-least-once. An external send followed by a crash before acknowledgement can still duplicate a message.
+
+See [logging](LOGGING.md), [architecture](ARCHITECTURE.md) and [traffic protection](TRAFFIC_PROTECTION.md).
