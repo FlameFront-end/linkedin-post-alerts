@@ -6,7 +6,11 @@ import { readConfig } from '../../../packages/runtime/src/config.js';
 import { createPool } from '../../../packages/runtime/src/db.js';
 import { runService } from '../../../packages/runtime/src/service.js';
 import type { ScheduledTask } from '../../../packages/runtime/src/scheduler.js';
-import { log } from '../../../packages/runtime/src/logger.js';
+import {
+  log,
+  errorFields,
+  failureLevel,
+} from '../../../packages/runtime/src/logger.js';
 import type { PostSource } from './sources/source.js';
 import { MockSource } from './sources/mock.js';
 import { LinkedInSource } from './sources/linkedin.js';
@@ -55,6 +59,10 @@ function register(
     shouldPoll?: () => boolean;
   },
 ) {
+  if (source instanceof LinkedInSource)
+    source.onPage = (page) =>
+      log('collector', 'page_decoded', { source: name, ...page });
+  let lastSkip = 0;
   tasks.push({
     name,
     intervalMs,
@@ -62,13 +70,30 @@ function register(
       if (
         config.COLLECTION_PAUSED ||
         (source.shouldPoll && !source.shouldPoll())
-      )
+      ) {
+        if (Date.now() - lastSkip >= 3600000) {
+          lastSkip = Date.now();
+          log('collector', 'poll_skipped', {
+            source: name,
+            reason: config.COLLECTION_PAUSED ? 'operator_pause' : 'not_due',
+          });
+        }
         return;
+      }
       if (
         name === 'jobs' &&
         (await protection.snapshot()).scopes.jobs.hold === 'jobs_rate_limited'
-      )
+      ) {
+        if (Date.now() - lastSkip >= 3600000) {
+          lastSkip = Date.now();
+          log('collector', 'poll_skipped', {
+            source: name,
+            reason: 'jobs_quarantined',
+          });
+        }
         return;
+      }
+      log('collector', 'poll_started', { source: name });
       let count = 0,
         failure: string | undefined;
       try {
@@ -78,6 +103,12 @@ function register(
       } catch (error) {
         if (signal.aborted) throw error;
         failure = error instanceof LinkedInError ? error.code : 'internal';
+        log(
+          'collector',
+          'source_failed',
+          { source: name, ...errorFields(error) },
+          failureLevel(failure),
+        );
       }
       if (source.reports && !source.reports.length && !failure) return;
       await monitor.record(

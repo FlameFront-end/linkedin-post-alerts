@@ -12,7 +12,7 @@ import {
   fail,
 } from '../../../packages/queue/src/index.js';
 import { transaction } from '../../../packages/runtime/src/db.js';
-import { log } from '../../../packages/runtime/src/logger.js';
+import { log, errorFields } from '../../../packages/runtime/src/logger.js';
 import {
   classifyPost,
   assessedCandidates,
@@ -25,6 +25,8 @@ export async function processNext(
 ): Promise<boolean> {
   const job = await claim(pool, 'post');
   if (!job) return false;
+  const started = Date.now();
+  log('processor', 'job_claimed', { jobId: job.id, attempt: job.attempts });
   const parsed = postSchema.safeParse(job.payload);
   if (!parsed.success) {
     await fail(pool, job, { permanent: true });
@@ -52,6 +54,10 @@ export async function processNext(
           (rawPost.sourceFingerprint ?? contentFingerprint(rawPost))
       ) {
         await complete(db, job);
+        log('processor', 'stale_version_skipped', {
+          jobId: job.id,
+          postId: post.id,
+        });
         return;
       }
       await db.query(
@@ -72,8 +78,21 @@ export async function processNext(
       );
       if (filterVacancies) {
         const candidates = assessedCandidates(post);
-        for (const candidate of candidates)
-          await recordVacancy(db, candidate.post, candidate.decision);
+        for (const candidate of candidates) {
+          const queued = await recordVacancy(
+            db,
+            candidate.post,
+            candidate.decision,
+          );
+          log('processor', 'candidate_decision', {
+            jobId: job.id,
+            postId: post.id,
+            decision: candidate.decision.reason,
+            language: candidate.decision.language,
+            roles: candidate.decision.roles.join(','),
+            notificationQueued: queued,
+          });
+        }
         if (!post.textIncomplete) {
           const active = candidates
             .filter(
@@ -99,8 +118,18 @@ export async function processNext(
     log('processor', 'post_processed', {
       jobId: job.id,
       decision: decision.reason,
+      postId: post.id,
+      language: decision.language,
+      roles: decision.roles.join(','),
+      durationMs: Date.now() - started,
     });
-  } catch {
+  } catch (error) {
+    log(
+      'processor',
+      'processing_failed',
+      { jobId: job.id, ...errorFields(error) },
+      'error',
+    );
     await fail(pool, job);
     log('processor', 'job_retry', { jobId: job.id, attempt: job.attempts });
   }

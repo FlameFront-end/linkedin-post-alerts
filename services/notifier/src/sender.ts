@@ -1,3 +1,4 @@
+import { log, errorFields } from '../../../packages/runtime/src/logger.js';
 export interface Sender {
   send(text: string, parseMode?: 'HTML'): Promise<void>;
   isReady?(): boolean;
@@ -46,9 +47,11 @@ export class TelegramSender implements Sender {
           }),
         },
       );
-    } catch {
+    } catch (error) {
+      log('notifier', 'telegram_network_error', errorFields(error), 'warn');
       throw new DeliveryError(false, this.pause(), true);
     }
+    log('notifier', 'telegram_response', { httpStatus: response.status });
     const body = (await response.json().catch(() => null)) as {
       ok?: boolean;
       parameters?: { retry_after?: number };

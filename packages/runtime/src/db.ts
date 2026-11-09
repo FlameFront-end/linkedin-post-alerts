@@ -1,12 +1,17 @@
 import pg from 'pg';
+import { log, errorFields } from './logger.js';
 export function createPool(connectionString: string) {
-  return new pg.Pool({
+  const pool = new pg.Pool({
     connectionString,
     max: 5,
     connectionTimeoutMillis: 5000,
     idleTimeoutMillis: 30000,
     statement_timeout: 10000,
   });
+  pool.on('error', (error) =>
+    log('database', 'pool_error', errorFields(error), 'error'),
+  );
+  return pool;
 }
 export type Database = pg.Pool | pg.PoolClient;
 export async function transaction<T>(

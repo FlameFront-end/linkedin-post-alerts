@@ -1,3 +1,4 @@
+import { log } from '../../../../packages/runtime/src/logger.js';
 import { decodeHtmlPage } from './search-html.js';
 import { decodeFeedPage } from './feed-pages.js';
 import {
@@ -206,6 +207,16 @@ export class GlobalPostSearch {
         decoded.posts.length > 0 &&
         pagination === 'unknown' &&
         this.settings.maxPages > 1;
+      log('collector', 'search_pagination', {
+        page: page + 1,
+        pagination,
+        hasServerContinuation: !!next,
+        hasNextLink: !!link,
+        cards: decoded.cards,
+        decodedPosts: decoded.posts.length,
+        skippedNoText: decoded.skippedNoText,
+        coverageLimited,
+      });
       yield {
         posts,
         discovered: decoded.cards || decoded.posts.length,

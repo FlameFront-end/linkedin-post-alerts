@@ -1,10 +1,23 @@
 name: linkedin-post-alerts
+x-log-driver: &log-driver
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+x-log-environment: &log-environment
+  LOG_DIR: /app/logs
+  LOG_MAX_BYTES: '5242880'
+  LOG_BACKUPS: '3'
+  LOG_RETENTION_DAYS: '7'
 x-app: &app
   build: .
+  user: '${LOCAL_UID:-1000}:${LOCAL_GID:-1000}'
+  logging: *log-driver
   init: true
   restart: unless-stopped
   stop_grace_period: 30s
   environment: &environment
+    <<: *log-environment
     DATABASE_URL: postgres://alerts:alerts@postgres:5432/alerts
     SOURCE_MODE: mock
     TELEGRAM_MODE: dry-run
@@ -18,6 +31,7 @@ x-app: &app
 services:
   postgres:
     image: postgres:17-alpine
+    logging: *log-driver
     restart: unless-stopped
     environment:
       POSTGRES_USER: alerts
@@ -32,14 +46,23 @@ services:
       retries: 20
   migrate:
     build: .
+    logging: *log-driver
+    user: '${LOCAL_UID:-1000}:${LOCAL_GID:-1000}'
+    volumes: ['./.local/logs/migrate:/app/logs']
     command: ['node', 'dist/scripts/migrate.js']
     environment:
+      <<: *log-environment
+      LOG_SERVICE: migrate
       DATABASE_URL: postgres://alerts:alerts@postgres:5432/alerts
     depends_on:
       postgres:
         condition: service_healthy
   collector:
     <<: *app
+    environment:
+      <<: *environment
+      LOG_SERVICE: collector
+    volumes: ['./.local/logs/collector:/app/logs']
     command: ['node', 'dist/services/collector/src/main.js']
     ports: ['127.0.0.1:3101:3101']
     healthcheck:
@@ -55,6 +78,12 @@ services:
       retries: 3
       start_period: 10s
   ocr:
+    user: '${LOCAL_UID:-1000}:${LOCAL_GID:-1000}'
+    logging: *log-driver
+    environment:
+      <<: *log-environment
+      LOG_SERVICE: ocr
+    volumes: ['./.local/logs/ocr:/app/logs']
     build:
       context: .
       dockerfile: Dockerfile.ocr
@@ -76,10 +105,12 @@ services:
       start_period: 30s
   processor:
     <<: *app
+    volumes: ['./.local/logs/processor:/app/logs']
     command: ['node', 'dist/services/processor/src/main.js']
     environment:
       <<: *environment
       OCR_URL: http://ocr:3104
+      LOG_SERVICE: processor
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -100,6 +131,10 @@ services:
       start_period: 10s
   notifier:
     <<: *app
+    environment:
+      <<: *environment
+      LOG_SERVICE: notifier
+    volumes: ['./.local/logs/notifier:/app/logs']
     command: ['node', 'dist/services/notifier/src/main.js']
     ports: ['127.0.0.1:3103:3103']
     healthcheck:

@@ -1,3 +1,4 @@
+import { log, failureLevel } from '../../../../packages/runtime/src/logger.js';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { z } from 'zod';
@@ -130,6 +131,7 @@ export class TrafficProtection {
       current.probe = 'armed';
       current.successes = 0;
     });
+    log('collector', 'probe_armed', { scope, confirmedAccount });
   }
   async run<T>(
     scope: TrafficScope,
@@ -221,16 +223,30 @@ export class TrafficProtection {
         if (current.probe === 'armed') current.probe = 'running';
         return { granted: true };
       });
-      if ('code' in reservation)
+      if ('code' in reservation) {
+        log(
+          'collector',
+          'request_denied',
+          {
+            scope,
+            code: reservation.code,
+            reason: reservation.reason,
+            retrySeconds: reservation.seconds,
+          },
+          failureLevel(reservation.code),
+        );
         throw new LinkedInError(
           reservation.code,
           Math.max(1, reservation.seconds!),
           reservation.reason,
         );
+      }
       if ('wait' in reservation) {
+        log('collector', 'request_wait', { scope, delayMs: reservation.wait });
         await this.wait(reservation.wait!, signal);
         continue;
       }
+      log('collector', 'request_reserved', { scope });
       break;
     }
     try {
@@ -275,6 +291,17 @@ export class TrafficProtection {
     await this.store.update((state) => {
       const now = this.now(),
         current = state.scopes[scope];
+      log(
+        'collector',
+        'protection_triggered',
+        {
+          scope,
+          code: error.code,
+          reason: error.reason,
+          retrySeconds: error.retryAfterSeconds,
+        },
+        'warn',
+      );
       current.failures++;
       current.successes = 0;
       delete current.probe;

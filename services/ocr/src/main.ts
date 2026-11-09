@@ -1,3 +1,10 @@
+import {
+  log,
+  errorFields,
+  installProcessLogging,
+  reference,
+} from '../../../packages/runtime/src/logger.js';
+installProcessLogging('ocr');
 import express from 'express';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,26 +23,35 @@ app.get('/health/ready', async (_req, res) => {
   try {
     await execute('tesseract', ['--version'], { timeout: 2000 });
     res.json({ status: 'ready' });
-  } catch {
+  } catch (error) {
+    log('ocr', 'readiness_failed', errorFields(error), 'warn');
     res.status(503).json({ status: 'unavailable' });
   }
 });
 app.post('/extract', async (req, res) => {
   const url: unknown = req.body?.url;
   if (typeof url !== 'string' || !vacancyImageUrl(url)) {
+    log('ocr', 'image_rejected', { reason: 'invalid_image_url' }, 'warn');
     res.status(400).json({ code: 'invalid_image_url' });
     return;
   }
+  const started = Date.now();
   const key = new URL(url).origin + new URL(url).pathname;
   const cached = cache.get(key);
   if (cached && cached.until > Date.now()) {
+    log('ocr', 'cache_hit', {
+      imageRef: reference(key),
+      chars: cached.text.length,
+    });
     res.json({ text: cached.text });
     return;
   }
   if (busy) {
+    log('ocr', 'busy', {}, 'warn');
     res.status(429).set('Retry-After', '30').json({ code: 'busy' });
     return;
   }
+  log('ocr', 'extract_started', { imageRef: reference(key) });
   busy = true;
   let directory: string | undefined;
   try {
@@ -43,6 +59,7 @@ app.post('/extract', async (req, res) => {
       redirect: 'manual',
       signal: AbortSignal.timeout(10000),
     });
+    log('ocr', 'image_response', { httpStatus: response.status });
     if (
       !response.ok ||
       !response.headers.get('content-type')?.startsWith('image/')
@@ -77,8 +94,24 @@ app.post('/extract', async (req, res) => {
     const text = result.stdout.normalize('NFKC').trim().slice(0, 60000);
     cache.set(key, { text, until: Date.now() + 3600000 });
     while (cache.size > 200) cache.delete(cache.keys().next().value!);
+    log('ocr', 'extract_completed', {
+      imageRef: reference(key),
+      chars: text.length,
+      bytes: size,
+      durationMs: Date.now() - started,
+    });
     res.json({ text });
-  } catch {
+  } catch (error) {
+    log(
+      'ocr',
+      'extract_failed',
+      {
+        imageRef: reference(key),
+        durationMs: Date.now() - started,
+        ...errorFields(error),
+      },
+      'warn',
+    );
     res.status(503).json({ code: 'ocr_unavailable' });
   } finally {
     busy = false;
@@ -88,6 +121,21 @@ app.post('/extract', async (req, res) => {
       );
   }
 });
-const server = app.listen(3104, '0.0.0.0');
+const server = app.listen(3104, '0.0.0.0', () =>
+  log('ocr', 'started', { port: 3104 }),
+);
+const heartbeat = setInterval(
+  () =>
+    log('ocr', 'heartbeat', {
+      uptimeSeconds: Math.round(process.uptime()),
+      cacheEntries: cache.size,
+      busy,
+    }),
+  60000,
+);
+heartbeat.unref();
 for (const signal of ['SIGINT', 'SIGTERM'] as const)
-  process.once(signal, () => server.close());
+  process.once(signal, () => {
+    clearInterval(heartbeat);
+    server.close(() => log('ocr', 'stopped'));
+  });

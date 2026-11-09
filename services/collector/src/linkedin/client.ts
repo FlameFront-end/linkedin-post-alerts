@@ -1,3 +1,10 @@
+import {
+  log,
+  errorFields,
+  failureLevel,
+  withLogContext,
+  newTraceId,
+} from '../../../../packages/runtime/src/logger.js';
 import { load } from 'cheerio';
 import type { ScopedProtection } from './protection.js';
 import { feedPaginationPath } from './feed-pages.js';
@@ -111,14 +118,48 @@ export class LinkedInClient {
     signal?: AbortSignal,
     body?: string,
   ): Promise<unknown> {
-    if (this.used >= this.limit) throw new LinkedInError('budget');
-    if (this.protection)
-      return this.protection.run(
-        () => this.performResponse(url, signal, body),
-        signal,
-      );
-    return this.performResponse(url, signal, body);
+    const started = Date.now();
+    const endpoint = isJobsPath(url.pathname)
+      ? url.pathname.endsWith('/search')
+        ? 'jobs_search'
+        : 'job_details'
+      : url.pathname === feedPagePath
+        ? 'feed'
+        : url.pathname === searchPagePath
+          ? 'post_search'
+          : body !== undefined
+            ? 'pagination'
+            : 'voyager';
+    return withLogContext({ requestId: newTraceId(), endpoint }, async () => {
+      try {
+        if (this.used >= this.limit) throw new LinkedInError('budget');
+        const result = this.protection
+          ? await this.protection.run(
+              () => this.performResponse(url, signal, body),
+              signal,
+            )
+          : await this.performResponse(url, signal, body);
+        log('collector', 'request_finished', {
+          durationMs: Date.now() - started,
+          requestsUsed: this.used,
+        });
+        return result;
+      } catch (error) {
+        log(
+          'collector',
+          'request_failed',
+          {
+            durationMs: Date.now() - started,
+            requestsUsed: this.used,
+            ...errorFields(error),
+          },
+          failureLevel(error instanceof LinkedInError ? error.code : 'network'),
+        );
+        throw error;
+      }
+    });
   }
+
   private async performResponse(
     url: URL,
     signal?: AbortSignal,
@@ -137,6 +178,11 @@ export class LinkedInClient {
     const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
     this.nextRequestAt = Date.now() + this.intervalMs;
     try {
+      log('collector', 'http_request_started', {
+        method: body === undefined ? 'GET' : 'POST',
+        requestsUsed: this.used,
+      });
+      const sentAt = Date.now();
       const response = await this.request(url, {
         redirect: 'manual',
         ...(url.pathname === feedPagePath ? { cache: 'no-store' } : {}),
@@ -169,6 +215,10 @@ export class LinkedInClient {
                 ? 'text/html'
                 : 'application/vnd.linkedin.normalized+json+2.1',
         },
+      });
+      log('collector', 'http_response', {
+        httpStatus: response.status,
+        durationMs: Date.now() - sentAt,
       });
       if ([301, 302, 303, 307, 308, 401, 403, 999].includes(response.status))
         throw new LinkedInError('auth_required');
@@ -221,6 +271,10 @@ export class LinkedInClient {
       } finally {
         reader.releaseLock();
       }
+      log('collector', 'response_read', {
+        bytes: size,
+        durationMs: Date.now() - sentAt,
+      });
       const content = Buffer.concat(chunks).toString('utf8');
       if (html || body !== undefined || returnedHtml) {
         const page = load(content);

@@ -17,7 +17,7 @@ import {
   release,
 } from '../../../packages/queue/src/index.js';
 import { DeliveryError, type Sender } from './sender.js';
-import { log } from '../../../packages/runtime/src/logger.js';
+import { log, errorFields } from '../../../packages/runtime/src/logger.js';
 import { formatAlert, formatNotification } from './format.js';
 
 export async function deliverNext(
@@ -75,6 +75,11 @@ export async function deliverNext(
       text = formatNotification({ ...value, roles }, preferRussian, true);
     }
   }
+  log('notifier', 'delivery_claimed', {
+    jobId: job.id,
+    kind: vacancy ? 'notification' : 'alert',
+    attempt: job.attempts,
+  });
   if (text === undefined) {
     await fail(pool, job, { permanent: true });
     return true;
@@ -84,15 +89,31 @@ export async function deliverNext(
     [job.id],
   );
   if (receipt.rowCount) {
+    log('notifier', 'receipt_found', { jobId: job.id });
     await complete(pool, job);
     return true;
   }
+  const started = Date.now();
   try {
+    log('notifier', 'delivery_started', { jobId: job.id, chars: text.length });
     await sender.send(text, vacancy ? 'HTML' : undefined);
   } catch (error) {
+    log(
+      'notifier',
+      'delivery_failed',
+      {
+        jobId: job.id,
+        durationMs: Date.now() - started,
+        ...errorFields(error),
+        blocked: error instanceof DeliveryError && error.blocked,
+        retrySeconds:
+          error instanceof DeliveryError ? error.retryAfterSeconds : undefined,
+      },
+      'warn',
+    );
     if (error instanceof DeliveryError && error.blocked) {
       await release(pool, job);
-      log('notifier', 'delivery_configuration_blocked', { jobId: job.id });
+      log('notifier', 'delivery_paused', { jobId: job.id });
       return false;
     }
     const options: { permanent?: boolean; delaySeconds?: number } = {};
@@ -105,6 +126,10 @@ export async function deliverNext(
     return true;
   }
   const sentAt = new Date().toISOString();
+  log('notifier', 'delivery_sent', {
+    jobId: job.id,
+    durationMs: Date.now() - started,
+  });
   // Retry acknowledgement only; never immediately resend an already sent message.
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -121,8 +146,15 @@ export async function deliverNext(
         );
         await complete(db, job);
       });
+      log('notifier', 'delivery_committed', { jobId: job.id });
       return true;
-    } catch {
+    } catch (error) {
+      log(
+        'notifier',
+        'ack_retry',
+        { jobId: job.id, attempt: attempt + 1, ...errorFields(error) },
+        'warn',
+      );
       if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }

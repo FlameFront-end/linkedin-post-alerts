@@ -20,7 +20,9 @@
     "format:check": "prettier --check .",
     "linkedin:check": "node --env-file-if-exists=.env --import tsx scripts/linkedin-check.ts",
     "queue:replay": "node --env-file-if-exists=.env --import tsx scripts/replay.ts",
-    "posts:audit": "node --env-file-if-exists=.env --import tsx scripts/reprocess.ts"
+    "posts:audit": "node --env-file-if-exists=.env --import tsx scripts/reprocess.ts",
+    "logs:report": "node --import tsx scripts/log-report.ts",
+    "logs:init": "node --import tsx scripts/log-init.ts"
   },
   "dependencies": {
     "cheerio": "^1.2.0",

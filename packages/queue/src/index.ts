@@ -1,3 +1,4 @@
+import { log, reference } from '../../runtime/src/logger.js';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../../runtime/src/db.js';
 import type { JobKind } from '../../contracts/src/index.js';
@@ -18,6 +19,11 @@ export async function enqueue(
     `INSERT INTO queue.jobs(kind,dedupe_key,payload) VALUES($1,$2,$3) ON CONFLICT(kind,dedupe_key) DO NOTHING RETURNING id`,
     [kind, key, JSON.stringify(payload)],
   );
+  log('queue', 'enqueue_result', {
+    kind,
+    keyRef: reference(key),
+    inserted: result.rowCount === 1,
+  });
   return result.rowCount === 1;
 }
 export async function claim(
@@ -40,6 +46,12 @@ export async function claim(
     FROM candidate c WHERE j.id=c.id RETURNING j.id,j.payload,j.attempts,j.lock_token`,
     [kind, randomUUID()],
   );
+  if (result.rows[0])
+    log('queue', 'claimed', {
+      kind,
+      jobId: result.rows[0].id,
+      attempt: result.rows[0].attempts,
+    });
   return result.rows[0];
 }
 export async function complete(db: Database, job: Job) {
@@ -48,7 +60,11 @@ export async function complete(db: Database, job: Job) {
     WHERE id=$1 AND lock_token=$2 AND status='running' AND locked_until > now()`,
     [job.id, job.lock_token],
   );
-  if (result.rowCount !== 1) throw new Error('Job lease lost');
+  if (result.rowCount !== 1) {
+    log('queue', 'lease_lost', { jobId: job.id }, 'error');
+    throw new Error('Job lease lost');
+  }
+  log('queue', 'completed', { jobId: job.id });
 }
 export async function fail(
   db: Database,
@@ -66,6 +82,17 @@ export async function fail(
     WHERE id=$1 AND lock_token=$2 AND status='running'`,
     [job.id, job.lock_token, options.permanent ?? false, delay],
   );
+  log(
+    'queue',
+    'failed',
+    {
+      jobId: job.id,
+      attempt: job.attempts,
+      permanent: options.permanent ?? false,
+      retrySeconds: delay,
+    },
+    'warn',
+  );
 }
 
 // Configuration failures do not consume the per-message delivery budget.
@@ -76,6 +103,7 @@ export async function release(db: Database, job: Job) {
     WHERE id=$1 AND lock_token=$2 AND status='running'`,
     [job.id, job.lock_token],
   );
+  log('queue', 'released', { jobId: job.id });
 }
 export async function replayDead(db: Database, kind: JobKind, id: string) {
   const result = await db.query(

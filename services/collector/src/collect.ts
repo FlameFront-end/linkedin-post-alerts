@@ -1,3 +1,4 @@
+import { log } from '../../../packages/runtime/src/logger.js';
 import { contentFingerprint } from '../../../packages/contracts/src/fingerprint.js';
 import { postSchema } from '../../../packages/contracts/src/index.js';
 import type { Database } from '../../../packages/runtime/src/db.js';
@@ -35,6 +36,15 @@ export async function collect(
           JSON.stringify(post),
         ],
       );
+      log('collector', 'post_observed', {
+        source: source.name,
+        postId: post.id,
+        revision: fingerprint.slice(0, 16),
+        queued: !!result.rowCount,
+        chars: post.text.length,
+        images: post.imageUrls?.length ?? 0,
+        incomplete: post.textIncomplete ?? false,
+      });
       count += result.rowCount ?? 0;
       onCount?.(count);
     }

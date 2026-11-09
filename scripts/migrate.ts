@@ -1,3 +1,4 @@
+import { log, errorFields } from '../packages/runtime/src/logger.js';
 import { readFile, readdir } from 'node:fs/promises';
 import { createPool } from '../packages/runtime/src/db.js';
 
@@ -6,6 +7,7 @@ if (!url) throw new Error('DATABASE_URL is required');
 const pool = createPool(url);
 const client = await pool.connect();
 try {
+  log('migrate', 'started');
   await client.query('SELECT pg_advisory_lock(472017)');
   await client.query(
     'CREATE TABLE IF NOT EXISTS public.schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())',
@@ -18,7 +20,10 @@ try {
       'SELECT 1 FROM public.schema_migrations WHERE name=$1',
       [name],
     );
-    if (exists.rowCount) continue;
+    if (exists.rowCount) {
+      log('migrate', 'migration_present', { migration: name });
+      continue;
+    }
     await client.query('BEGIN');
     try {
       await client.query(await readFile(new URL(name, directory), 'utf8'));
@@ -27,12 +32,19 @@ try {
         [name],
       );
       await client.query('COMMIT');
-      console.log(`Applied ${name}`);
+      log('migrate', 'migration_applied', { migration: name });
     } catch (error) {
+      log(
+        'migrate',
+        'migration_failed',
+        { migration: name, ...errorFields(error) },
+        'error',
+      );
       await client.query('ROLLBACK');
       throw error;
     }
   }
+  log('migrate', 'completed');
 } finally {
   await client.query('SELECT pg_advisory_unlock(472017)');
   client.release();

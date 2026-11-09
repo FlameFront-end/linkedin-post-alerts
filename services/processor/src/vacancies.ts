@@ -1,3 +1,4 @@
+import { log } from '../../../packages/runtime/src/logger.js';
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
 import type { Post } from '../../../packages/contracts/src/index.js';
@@ -76,7 +77,10 @@ export async function recordVacancy(
     'INSERT INTO processing.vacancy_revisions(vacancy_id,revision,payload) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
     [id, revision, JSON.stringify(post)],
   );
-  if (!changed) return false;
+  if (!changed) {
+    log('processor', 'vacancy_duplicate', { postId: post.id, vacancyId: id });
+    return false;
+  }
   // Seed the new ledger from legacy delivered notifications without resending them.
   const legacy =
     !existing &&
@@ -86,7 +90,19 @@ export async function recordVacancy(
         [post.id, post.text],
       )
     ).rowCount === 1;
-  if (legacy) return false;
+  if (legacy) {
+    log('processor', 'legacy_delivery_preserved', {
+      postId: post.id,
+      vacancyId: id,
+    });
+    return false;
+  }
+  log('processor', 'vacancy_revision', {
+    postId: post.id,
+    vacancyId: id,
+    revision: revision.slice(0, 16),
+    updated: !!existing,
+  });
   return enqueue(db, 'notification', `${id}:${revision}`, {
     post,
     roles,

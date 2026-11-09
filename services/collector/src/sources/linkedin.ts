@@ -1,3 +1,4 @@
+import { log } from '../../../../packages/runtime/src/logger.js';
 import { decodeFeedPage, feedContinuation } from '../linkedin/feed-pages.js';
 import { decodeSearchHtml } from '../linkedin/search-html.js';
 import type { ScopedProtection } from '../linkedin/protection.js';
@@ -216,6 +217,12 @@ export class LinkedInSource implements PostSource {
                 return false;
               seen.add(post.id);
               return true;
+            });
+            log('collector', 'feed_pagination', {
+              page: page + 1,
+              decodedPosts: discovered.length,
+              fresh: fresh.length,
+              hasContinuation: !!continuation,
             });
             posts += fresh.length;
             this.onPage?.({

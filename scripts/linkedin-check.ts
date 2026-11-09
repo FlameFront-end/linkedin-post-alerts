@@ -1,3 +1,6 @@
+import { resolve } from 'node:path';
+import { log, errorFields } from '../packages/runtime/src/logger.js';
+process.env.LOG_DIR ??= resolve('.local/logs/diagnostics');
 import { createPool } from '../packages/runtime/src/db.js';
 import {
   TrafficProtection,
@@ -32,6 +35,10 @@ if (!process.env.DATABASE_URL)
   throw Error(
     'DATABASE_URL is required: diagnostics may not bypass durable protection',
   );
+log('diagnostics', 'check_started', {
+  mode: mode ?? 'status',
+  scope: scopeArg ?? 'none',
+});
 const pool = createPool(process.env.DATABASE_URL);
 let protection: TrafficProtection | undefined;
 try {
@@ -93,6 +100,11 @@ try {
           ? decodeJobCards(body).length
           : decodeHtmlPage(body, new Date(), scope).posts.length;
     }
+    log('diagnostics', 'probe_completed', {
+      scope,
+      count,
+      requests: client.requestsUsed,
+    });
     console.log(
       JSON.stringify({
         status: 'ok',
@@ -104,6 +116,7 @@ try {
     );
   }
 } catch (error) {
+  log('diagnostics', 'check_blocked', errorFields(error), 'warn');
   if (mode && protection && error instanceof LinkedInError)
     await protection.failure(scopeArg as TrafficScope, error);
   console.error(
