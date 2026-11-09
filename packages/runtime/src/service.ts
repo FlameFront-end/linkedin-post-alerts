@@ -11,7 +11,7 @@ export async function runService(options: {
   tick?: (signal: AbortSignal) => Promise<void>;
   tasks?: ScheduledTask[];
   diagnostics?: () => Promise<unknown>;
-  readyCheck?: () => boolean;
+  readyCheck?: () => boolean | Promise<boolean>;
 }) {
   const { name, port, intervalMs, pool, tick } = options;
   const abort = new AbortController();
@@ -22,7 +22,7 @@ export async function runService(options: {
   });
   app.get('/health/ready', async (_req, res) => {
     try {
-      if (options.readyCheck && !options.readyCheck())
+      if (options.readyCheck && !(await options.readyCheck()))
         throw new Error('Dependency unavailable');
       await pool.query('SELECT 1 FROM queue.jobs LIMIT 0');
       res.json({ service: name, status: 'ready' });

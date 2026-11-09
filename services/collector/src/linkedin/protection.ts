@@ -285,6 +285,7 @@ export class TrafficProtection {
       } else if (error.code === 'auth_required') {
         state.hold = error.reason ?? 'auth_required';
       } else if (error.code === 'rate_limited') {
+        if (scope === 'jobs') current.hold = 'jobs_rate_limited';
         if (error.reason === 'retry_after_exceeds_week')
           state.hold = 'retry_after_exceeds_week';
         if (now - state.lastRateAt > day) state.rateStrikes = 0;

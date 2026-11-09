@@ -389,3 +389,36 @@ test('Live transport cannot accidentally be constructed without durable protecti
       error.reason === 'durable_protection_required',
   );
 });
+
+test('Guest Jobs 429 requires explicit recovery instead of stopping posts every hour', async () => {
+  const h = harness();
+  let requests = 0;
+  await assert.rejects(
+    h.guard.run('jobs', async () => {
+      requests++;
+      throw new LinkedInError('rate_limited', 60);
+    }),
+    rejectsCode('rate_limited'),
+  );
+  assert.equal(
+    (await h.guard.snapshot()).scopes.jobs.hold,
+    'jobs_rate_limited',
+  );
+  await assert.rejects(
+    h.guard.run('feed', async () => assert.fail('global pause bypassed')),
+    rejectsCode('protection_pause'),
+  );
+  h.advance(3600001);
+  const restarted = new TrafficProtection(h.store, h.policy, h.clock, h.wait);
+  await assert.rejects(
+    restarted.run('jobs', async () => {
+      requests++;
+    }),
+    rejectsCode('source_blocked'),
+  );
+  await restarted.run('feed', async () => {});
+  await restarted.run('search', async () => {});
+  assert.equal(requests, 1);
+  await restarted.armProbe('jobs');
+  assert.equal(await restarted.cycleBudget('jobs', 10), 1);
+});

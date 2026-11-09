@@ -64,6 +64,11 @@ function register(
         (source.shouldPoll && !source.shouldPoll())
       )
         return;
+      if (
+        name === 'jobs' &&
+        (await protection.snapshot()).scopes.jobs.hold === 'jobs_rate_limited'
+      )
+        return;
       let count = 0,
         failure: string | undefined;
       try {
@@ -159,19 +164,38 @@ await runService({
   intervalMs: config.POLL_INTERVAL_MS,
   pool,
   tasks,
-  readyCheck: () =>
-    !config.COLLECTION_PAUSED &&
-    monitor.ready(
-      tasks.map((task) => ({ name: task.name, intervalMs: task.intervalMs })),
-    ),
-  diagnostics: async () => ({
-    paused: config.COLLECTION_PAUSED,
-    protection: await protection.snapshot(),
-    limits: settings?.protection,
-    schedule: tasks.map((task) => ({
-      source: task.name,
-      intervalMs: task.intervalMs,
-    })),
-    ...(await monitor.diagnostics()),
-  }),
+  readyCheck: async () => {
+    const guard = await protection.snapshot();
+    return (
+      !config.COLLECTION_PAUSED &&
+      monitor.ready(
+        tasks
+          .filter(
+            (task) =>
+              !(
+                task.name === 'jobs' &&
+                guard.scopes.jobs.hold === 'jobs_rate_limited'
+              ),
+          )
+          .map((task) => ({ name: task.name, intervalMs: task.intervalMs })),
+      )
+    );
+  },
+  diagnostics: async () => {
+    const guard = await protection.snapshot();
+    const disabledSources =
+      guard.scopes.jobs.hold === 'jobs_rate_limited' ? ['jobs'] : [];
+    return {
+      paused: config.COLLECTION_PAUSED,
+      protection: guard,
+      disabledSources,
+      degraded: disabledSources.length > 0,
+      limits: settings?.protection,
+      schedule: tasks.map((task) => ({
+        source: task.name,
+        intervalMs: task.intervalMs,
+      })),
+      ...(await monitor.diagnostics()),
+    };
+  },
 });
