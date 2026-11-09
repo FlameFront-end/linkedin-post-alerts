@@ -149,6 +149,7 @@ if (settings) {
         knownPosts,
         undefined,
         protection.forScope('feed'),
+        state,
       ),
     );
   if (settings.keywords.length || settings.authorUrns.length)
@@ -222,6 +223,7 @@ await runService({
       disabledSources,
       degraded: disabledSources.length > 0,
       limits: settings?.protection,
+      feedDeepIntervalMs: settings?.feedDeepIntervalMs,
       schedule: tasks.map((task) => ({
         source: task.name,
         intervalMs: task.intervalMs,

@@ -7,7 +7,7 @@ const schema = z
     SOURCE_MODE: z.enum(['mock', 'linkedin']).default('mock'),
     LINKEDIN_CONFIG_FILE: z.string().min(1).default('.local/linkedin.json'),
     POLL_INTERVAL_MS: positiveInt.min(1000).default(180000),
-    FEED_POLL_INTERVAL_MS: positiveInt.min(60000).default(180000),
+    FEED_POLL_INTERVAL_MS: positiveInt.min(60000).default(300000),
     COLLECTION_PAUSED: z
       .enum(['true', 'false'])
       .default('false')

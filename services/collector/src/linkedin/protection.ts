@@ -60,7 +60,7 @@ export interface ScopedProtection {
 const hour = 3600000,
   day = 24 * hour;
 export const minimumPollMs: Record<TrafficScope, number> = {
-  feed: 600000,
+  feed: 300000,
   search: 1800000,
   jobs: 3600000,
 };

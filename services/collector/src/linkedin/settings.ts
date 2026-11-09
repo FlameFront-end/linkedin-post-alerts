@@ -34,6 +34,12 @@ export const settingsSchema = z
     jobsMaxPages: z.number().int().min(1).max(5).default(2),
     jobsRequestBudget: z.number().int().min(4).max(30).default(10),
     personalFeed: z.boolean().default(false),
+    feedDeepIntervalMs: z
+      .number()
+      .int()
+      .min(1800000)
+      .max(86400000)
+      .default(1800000),
     personalFeedLoadMore: z.number().int().min(0).max(20).default(2),
     authorUrns: z
       .array(z.string().regex(/^urn:li:fsd_profile:[A-Za-z0-9_-]+$/))

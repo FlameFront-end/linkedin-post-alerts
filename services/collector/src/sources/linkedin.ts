@@ -1,3 +1,5 @@
+import { FeedDepthSchedule } from '../linkedin/feed-depth.js';
+import type { StateStore } from '../state.js';
 import { log } from '../../../../packages/runtime/src/logger.js';
 import { decodeFeedPage, feedContinuation } from '../linkedin/feed-pages.js';
 import { decodeSearchHtml } from '../linkedin/search-html.js';
@@ -34,6 +36,7 @@ export class LinkedInSource implements PostSource {
   readonly name = 'linkedin';
   private readonly client: LinkedInClient;
   private readonly globalSearch: GlobalPostSearch;
+  private readonly feedDepth: FeedDepthSchedule;
   private disabled = new Map<number, number>();
   private cycle = 0;
   private deepCycle = 0;
@@ -55,7 +58,9 @@ export class LinkedInSource implements PostSource {
     known?: KnownPosts,
     gate?: RequestGate,
     private readonly protection?: ScopedProtection,
+    state?: StateStore,
   ) {
+    this.feedDepth = new FeedDepthSchedule(settings.feedDeepIntervalMs, state);
     this.client = new LinkedInClient(
       settings.session,
       settings.requestIntervalMs,
@@ -202,12 +207,17 @@ export class LinkedInSource implements PostSource {
             throw new LinkedInError('response_format');
           let discovered = decodeSearchHtml(html, new Date(), 'feed');
           parsedPages++;
+          const loadMore =
+            this.settings.personalFeedLoadMore > 0 &&
+            (await this.feedDepth.due())
+              ? this.settings.personalFeedLoadMore
+              : 0;
+          log('collector', 'feed_refresh_mode', {
+            deep: loadMore > 0,
+            maxAdditionalPages: loadMore,
+          });
           let continuation = feedContinuation(html, true);
-          for (
-            let page = 0;
-            page <= this.settings.personalFeedLoadMore;
-            page++
-          ) {
+          for (let page = 0; page <= loadMore; page++) {
             const fresh = discovered.filter((post) => {
               if (
                 seen.has(post.id) ||
@@ -235,8 +245,7 @@ export class LinkedInSource implements PostSource {
               skippedKnown: 0,
             });
             yield fresh;
-            if (!continuation || page === this.settings.personalFeedLoadMore)
-              break;
+            if (!continuation || page === loadMore) break;
             const response = await this.client.nextPage(continuation, signal);
             discovered = decodeFeedPage(response);
             parsedPages++;
