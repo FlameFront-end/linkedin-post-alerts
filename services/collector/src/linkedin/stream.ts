@@ -64,23 +64,29 @@ export function streamText(input: string, html: boolean): string {
 }
 export function streamRecords(input: string): Map<string, unknown> {
   const records = new Map<string, unknown>();
-  for (const match of input.matchAll(/(?:^|\n)([0-9a-f]+):/g)) {
-    const at = match.index + match[0].length;
-    if (input[at] === 'T') {
-      const length = input.slice(at + 1).match(/^([0-9a-f]+),/);
+  const bytes = Buffer.from(input);
+  let offset = 0;
+  while (offset < bytes.length) {
+    const newline = bytes.indexOf(10, offset);
+    const end = newline === -1 ? bytes.length : newline;
+    const line = bytes.toString('utf8', offset, end);
+    const header = /^([0-9a-f]+):/.exec(line);
+    if (header) {
+      const id = header[1]!;
+      const body = line.slice(header[0].length);
+      const length = /^T([0-9a-f]+),/.exec(body);
       if (length) {
-        const from = at + 1 + length[0].length;
-        records.set(
-          match[1]!,
-          Buffer.from(input.slice(from))
-            .subarray(0, parseInt(length[1]!, 16))
-            .toString('utf8'),
-        );
+        const start = offset + header[0].length + length[0].length;
+        const size = Number.parseInt(length[1]!, 16);
+        if (!Number.isSafeInteger(size) || size > bytes.length - start) break;
+        records.set(id, bytes.toString('utf8', start, start + size));
+        offset = start + size;
+        continue;
       }
-    } else {
-      const value = readJson(input, at);
-      if (value !== undefined) records.set(match[1]!, value);
+      const value = readJson(body, 0);
+      if (value !== undefined) records.set(id, value);
     }
+    offset = end + 1;
   }
   return records;
 }
@@ -93,12 +99,27 @@ export function renderText(
   if (depth > 30) return '';
   if (typeof value === 'string') {
     if (value.startsWith('$$')) return value.slice(1);
-    const ref = value.match(/^\$(?:L)?([0-9a-f]+)$/);
-    if (!ref || (!records.has(ref[1]!) && /^\$\d/.test(value))) return value;
+    const ref = value.match(/^\$(?:L)?([0-9a-f]+)((?::[\w-]+)*)$/);
+    if (!ref)
+      return value.replace(
+        /\$[0-9a-f]+(?::(?:props|children|initialContent|textProps|\d+))+/g,
+        '',
+      );
     const id = ref[1]!;
-    if (visited.has(id)) return '';
-    const next = new Set(visited).add(id);
-    return renderText(records.get(id), records, next, depth + 1);
+    const path = ref[2]!;
+    if (!path && !records.has(id) && /^\$\d+$/.test(value)) return value;
+    if (visited.has(value)) return '';
+    let target = records.get(id);
+    for (const key of path.split(':').slice(1)) {
+      if (key === 'props' && Array.isArray(target) && target[0] === '$') {
+        target = target[3];
+        continue;
+      }
+      if (!target || typeof target !== 'object' || !Object.hasOwn(target, key))
+        return '';
+      target = (target as Record<string, unknown>)[key];
+    }
+    return renderText(target, records, new Set(visited).add(value), depth + 1);
   }
   if (Array.isArray(value)) {
     if (value[0] === '$')
@@ -111,7 +132,12 @@ export function renderText(
   }
   if (value && typeof value === 'object') {
     const node = value as Record<string, unknown>;
-    return renderText(node.children ?? node.text, records, visited, depth + 1);
+    return renderText(
+      node.children ?? node.textProps ?? node.text,
+      records,
+      visited,
+      depth + 1,
+    );
   }
   return '';
 }

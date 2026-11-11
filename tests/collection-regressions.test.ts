@@ -335,3 +335,50 @@ test('A malformed first next link does not hide a valid second next link', async
     undefined,
   );
 });
+
+test('Feed commentary stays attached to its own post across independent Flight records', () => {
+  const first = id(100);
+  const second = id(200);
+  const stream = [
+    `0:${JSON.stringify({ componentKey: 'update-card-focus-one' })}`,
+    `1:${JSON.stringify({ componentKey: 'translatable-commentary-shareId=' + first, textProps: { children: 'Итоги конференции' } })}`,
+    `2:${JSON.stringify({ componentKey: 'translatable-commentary-shareId=' + second, textProps: { children: 'Ищем Frontend инженера' } })}`,
+    `3:${JSON.stringify({ componentKey: 'translatable-commentary-shareId=' + id(300) })}`,
+    '4:{"textProps":{"children":"Текст из соседней записи"}}',
+  ].join('\n');
+  const posts = new Map(
+    decodeFeedPage(stream).map((post) => [post.id, post.text]),
+  );
+  assert.equal(posts.size, 2);
+  assert.equal(posts.get('urn:li:share:' + first), 'Итоги конференции');
+  assert.equal(posts.get('urn:li:share:' + second), 'Ищем Frontend инженера');
+});
+
+test('Flight text records respect byte lengths and resolve paths without exposing tokens', () => {
+  const value = id();
+  const literal = 'Удалёнка\n5:{"componentKey":"not a real record"}';
+  const link = ['$', 'a', null, { children: 'текст ссылки' }];
+  const stream = `a:T${Buffer.byteLength(literal).toString(16)},${literal}b:${JSON.stringify(link)}\n0:${JSON.stringify({ componentKey: 'translatable-commentary-shareId=' + value, textProps: { children: ['$a', ' ', '$b:props:children', ' ', '$c:props:children', ' $3000'] } })}`;
+  assert.equal(
+    decodeFeedPage(stream)[0]?.text,
+    `${literal} текст ссылки  $3000`,
+  );
+});
+
+test('Stream resolves text inside the commentary initialContent wrapper', () => {
+  const key = 'translatable-commentary-shareId=' + id();
+  const text = 'Ищем Angular разработчика в продуктовую команду';
+  const content = ['$', '$L7', null, { textProps: { children: text } }];
+  const wrapper = ['$', '$L8', null, { children: content }];
+  const stream = [
+    '0:' + JSON.stringify({ componentKey: key, children: '$a' }),
+    'a:' +
+      JSON.stringify([
+        '$',
+        '$L9',
+        null,
+        { componentKey: key, initialContent: wrapper },
+      ]),
+  ].join('\n');
+  assert.equal(decodeFeedPage(stream)[0]?.text, text);
+});

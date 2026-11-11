@@ -77,3 +77,67 @@ test('Hiring post addressing candidates is still a vacancy', () =>
     ),
     ['frontend'],
   ));
+
+for (const text of [
+  'Rust Engineer (Low-Latency Trading Systems)\nМы ищем инженера. Работа с торговыми движками и Rust. Взаимодействие с full-stack командой.',
+  'Ищем Golang-разработчика. Работа удалённо. Обязанности: серверные сервисы и интеграция с frontend.',
+  'Открыта вакансия Middle Fullstack QA. Работа удалённо. Опыт автоматизации тестирования.',
+  'Role: Billing Intake Coordinator (Front-End)\nИщем специалиста по обработке счетов. Опыт работы и удалённый формат.',
+  'I’m hiring a Brand Manager in Canada!\nИщем сотрудника для работы с кампаниями и frontend командой. Удалённо.',
+]) {
+  test(`Reject incidental role matches: ${text.split('\n')[0]}`, () => {
+    assert.deepEqual(vacancyRoles(classify(text)), []);
+  });
+}
+
+test('A Russian requirement in another listing cannot qualify a frontend entry', () => {
+  const roundup = post(
+    'New jobs in Egypt and Gulf\n🔹 Full Stack Developer | Example company\n🇷🇺 🔹 Aesthetic Doctor – Russian Speaking | Clinic\n🔹 Frontend Engineer | Another company',
+  );
+  assert.deepEqual(vacancyCandidates(roundup), []);
+});
+
+test('Translated medical roundup does not qualify an English-language developer listing', () => {
+  const roundup = post(
+    'Новые рабочие места в регионе\n🔹 Full Stack разработчик (переезд в Александрию) | Example company\n🔹 Врач | Клиника предлагает работу, опыт от трёх лет',
+  );
+  assert.deepEqual(vacancyCandidates(roundup), []);
+});
+
+test('Roundup keeps the entry with a local Russian requirement', () => {
+  const roundup = post(
+    'New jobs in Egypt and Gulf\n🔹 Full Stack Developer | Example company\n🔹 Frontend Engineer | Fluent Russian required\n🔹 Aesthetic Doctor | Clinic',
+  );
+  const candidates = vacancyCandidates(roundup);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]!.post.title, 'Frontend Engineer');
+  assert.equal(candidates[0]!.decision.language, 'required');
+});
+
+test('Frontend vacancy can mention Rust services and the QA team', () => {
+  assert.deepEqual(
+    vacancyRoles(
+      classify(
+        'Ищем frontend разработчика для интеграции с Rust API и работы с QA командой. Удалённо, опыт от трёх лет.',
+      ),
+    ),
+    ['frontend'],
+  );
+});
+
+test('Salary is read from a single line, preserving the entire range', async () => {
+  const { vacancyFacts } = await import('../packages/contracts/src/facts.js');
+  assert.equal(
+    vacancyFacts(post('Пересечение с UTC+3\n4000–5500 USD\nОпыт от 3 лет'))
+      .salary,
+    '4000–5500 USD',
+  );
+  assert.equal(
+    vacancyFacts(post('Expected Salary: $70K-$80K per year')).salary,
+    '$70K-$80K',
+  );
+  assert.equal(
+    vacancyFacts(post('Статья: сервис стоит $9.51 в месяц.')).salary,
+    undefined,
+  );
+});

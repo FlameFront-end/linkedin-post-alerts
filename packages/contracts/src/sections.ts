@@ -5,7 +5,21 @@ export interface VacancySection {
 const roleStart =
   /^(?:(?:senior|middle|junior|lead|staff|principal|старший|ведущий|младший)\s+)?(?:front[ -]?end|full[ -]?stack|back[ -]?end|dev[ -]?ops|sre|react|vue|angular|фронт[еэ]нд|фулл?[ -]?ст[еэ]к|б[эе]кенд|девопс)(?=\s|[:—–-]|$)/iu;
 
-/** Split only explicit role headings, preserving shared introduction. */
+export function vacancyRowTitle(line: string): string | undefined {
+  const prefix =
+    /^\s*(?:\p{Regional_Indicator}{2}\s*)?(?:[•▪◦●🔹🔸]\s*|[-*]\s+|\d+[.)]\s+)/u.exec(
+      line,
+    );
+  if (!prefix || !/\s\|\s/.test(line)) return undefined;
+  return (
+    line
+      .slice(prefix[0].length)
+      .split(/\s\|\s/, 1)[0]!
+      .trim() || undefined
+  );
+}
+
+/** Split explicit vacancy rows and role headings. */
 export function splitVacancies(text: string): VacancySection[] {
   const lines = text
     .replace(
@@ -13,6 +27,18 @@ export function splitVacancies(text: string): VacancySection[] {
       '$1\n',
     )
     .split('\n');
+  // Numbered/bulleted job-board entries may mix occupations and languages.
+  // Treat every row as a boundary, even when the title is outside our profile.
+  const rows = lines.flatMap((line, index) => {
+    const title = vacancyRowTitle(line);
+    return title ? [{ index, title }] : [];
+  });
+  if (rows.length >= 2) {
+    return rows.map((row, index) => ({
+      title: row.title,
+      text: lines.slice(row.index, rows[index + 1]?.index).join('\n'),
+    }));
+  }
   const heads = lines.flatMap((line, index) => {
     const clean = line
       .normalize('NFKC')

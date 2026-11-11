@@ -13,9 +13,24 @@ export function vacancyFacts(post: Post): VacancyFacts {
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter(Boolean);
   const facts: VacancyFacts = {};
-  const salary = post.text.match(
-    /(?:[$€£₽]\s*\d[\d\s.,]*(?:[kк]|\s*[-–—]\s*[$€£₽]?\s*\d[\d\s.,]*[kк]?)?|(?:от\s+|до\s+|from\s+|up to\s+)?\d[\d\s.,]*(?:[kк])?(?:\s*[-–—]\s*\d[\d\s.,]*[kк]?)?\s*(?:USD|EUR|RUB|USDT|руб(?:лей|ля)?|доллар(?:ов|а)?|тыс\.?\s*руб))/iu,
-  )?.[0];
+  const salary = lines
+    .map((line) => {
+      const content = line.replace(
+        /^[\s\p{Extended_Pictographic}\p{Emoji_Presentation}•-]+/gu,
+        '',
+      );
+      const labelled =
+        /(?:salary|compensation|pay range|зарплат[аы]|ставка|оклад|вилка)\s*[:—–-]?\s*/iu.exec(
+          content,
+        );
+      const amount = labelled
+        ? content.slice(labelled.index + labelled[0].length)
+        : content;
+      return amount.match(
+        /^(?:(?:от|до|from|up to) +)?(?:[$€£₽] *\d+(?:[., ]\d{3})*(?:[.,]\d{1,2})?[kк]?(?: *[-–—] *[$€£₽]? *\d+(?:[., ]\d{3})*(?:[.,]\d{1,2})?[kк]?)?|\d+(?:[., ]\d{3})*[kк]?(?: *[-–—] *\d+(?:[., ]\d{3})*[kк]?)? *(?:USD|EUR|USDT|RUB|руб(?:лей|ля)?|тыс\.? *руб)(?!\p{L}))/iu,
+      )?.[0];
+    })
+    .find(Boolean);
   if (salary) facts.salary = salary.replace(/\s+/g, ' ').trim().slice(0, 100);
   const location =
     post.location ||
@@ -28,7 +43,7 @@ export function vacancyFacts(post: Post): VacancyFacts {
   const work = lines.find((line) =>
     /remote|удал[её]н|onsite|on-site|офис|гибрид|hybrid/iu.test(line),
   );
-  if (work) facts.workFormat = work.slice(0, 120);
+  if (work && work !== location) facts.workFormat = work.slice(0, 120);
   const seniority = [post.title ?? '', post.text]
     .join('\n')
     .match(

@@ -1,6 +1,6 @@
 import type { Post, Role } from './index.js';
 import { assessLanguage, type LanguageMatch } from './language.js';
-import { splitVacancies } from './sections.js';
+import { splitVacancies, vacancyRowTitle } from './sections.js';
 export { languageMatch } from './language.js';
 export type { LanguageMatch } from './language.js';
 export interface Classification {
@@ -24,6 +24,16 @@ const infrastructure = /\b(?:dev[ -]?ops|sre)\b|site reliability|девопс/u;
 const adjacent =
   /(?:\b(?:react(?:\.js)?|vue(?:\.js)?|angular|next\.js|nuxt|svelte|ui|web|javascript|typescript)\s*[- /]?\s*(?:developer|engineer|разработчик|инженер)|(?:разработчик|инженер)[а-яё]*\s+(?:react|vue|angular|next\.js|nuxt|svelte|javascript|typescript)|веб[ -]?разработчик)/u;
 
+const unrelatedRole =
+  /\b(?:sdet|quality assurance (?:engineer|specialist)|test(?:ing)? (?:engineer|developer)|billing intake coordinator|brand manager|data entry (?:clerk|specialist)|(?:qa|rust|golang|go)[ -]+(?:engineer|developer)|full[ -]?stack qa)\b|\b(?:engineer|developer)\s*\((?:rust|golang|go)\)|\b(?:rust|golang|go|qa)[ -]+(?:разработчик|инженер)|(?:разработчик|инженер)[а-яё]*\s+(?:rust|golang|go|qa)\b|тестировщик|инженер по тестированию/u;
+
+function firstContentLine(text: string): string | undefined {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .find(Boolean);
+}
+
 function detectRoles(text: string): Role[] {
   const roles: Role[] = [];
   if (fullstack.test(text)) roles.push('fullstack');
@@ -40,6 +50,7 @@ function detectRoles(text: string): Role[] {
 }
 export function plausibleJobTitle(title: string): boolean {
   const value = title.normalize('NFKC').toLowerCase();
+  if (unrelatedRole.test(value)) return false;
   if (detectRoles(value).some((role) => role !== 'devops')) return true;
   return (
     !backend.test(value) &&
@@ -81,6 +92,11 @@ function classifySection(
     /ищем|требуется|нанимаем|открыт[аы]\s+(?:позици|ваканси)|ищу\s+(?:frontend|full[ -]?stack|фронт|фулл?стек|react|vue|angular)|в\s+поиске\s+.{0,30}(?:разработчика|инженера)|\bhiring\b|we(?:'re| are|’re) looking|join our team/u.test(
       value,
     );
+  const heading = firstContentLine(value);
+  const structuredListing =
+    title !== undefined &&
+    heading !== undefined &&
+    vacancyRowTitle(heading) === title;
   const promotion =
     /курс[аыу]?\b|обучени|вебинар|менторств|certification|bootcamp|training program|enroll|скидка/u.test(
       value,
@@ -96,19 +112,23 @@ function classifySection(
     return result('promotion');
   if (
     !context.listing &&
+    !structuredListing &&
     !explicitHiring &&
     !/вакансия|#ваканси|\bvacancy\b/u.test(value)
   )
     return result('no_hiring');
   // A clear role in the title or recruiting sentence outranks incidental team mentions.
   const sentences = value.split(/[\n.!?]/);
-  const lead =
-    title ??
-    sentences.find((line) =>
-      /ищем|требуется|нанимаем|ищу|hiring|looking/u.test(line),
-    ) ??
-    sentences.find((line) => /ваканси/u.test(line)) ??
-    sentences[0]!;
+  const hiringLine = sentences.find((line) =>
+    /ищем|требуется|нанимаем|ищу|hiring|looking|ваканси/u.test(line),
+  );
+  const lead = title ?? hiringLine ?? heading ?? '';
+  if (
+    unrelatedRole.test(lead) ||
+    (!title && heading && heading.length <= 160 && unrelatedRole.test(heading))
+  ) {
+    return result('no_role');
+  }
   const primary = detectRoles(lead);
   if (!primary.length && (backend.test(lead) || infrastructure.test(lead)))
     return result('no_role');
@@ -137,6 +157,7 @@ export function classify(
   text: string,
   context: { title?: string | undefined; listing?: boolean } = {},
 ): Classification {
+  if (context.title || context.listing) return classifySection(text, context);
   const sections = splitVacancies(text);
   if (sections.length === 1) return classifySection(text, context);
   const decisions = sections.map((section) =>
@@ -171,7 +192,9 @@ export function assessedCandidates(
   post: Post,
 ): { post: Post; decision: Classification }[] {
   const sections =
-    post.kind === 'job' ? [{ text: post.text }] : splitVacancies(post.text);
+    post.kind === 'job' || post.title
+      ? [{ text: post.text }]
+      : splitVacancies(post.text);
   return sections.map((section) => {
     const candidate: Post = {
       ...post,

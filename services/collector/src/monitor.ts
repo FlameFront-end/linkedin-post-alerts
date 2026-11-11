@@ -138,11 +138,6 @@ export class SourceMonitor {
         code: `${name}_degraded`,
         message: `${name}: часть запросов регулярно не работает (${failedTargets} из ${reports.length}). Проверьте /status и журнал target_result.`,
       });
-    if (coverageLimited && !previous?.coverageLimited)
-      await raiseAlert(this.db, {
-        code: `${name}_coverage_limited`,
-        message: `${name}: страницы поиска получены, но продолжение не распознано. Это не блокировка: возможны конец выдачи или неподдерживаемый формат пагинации. Доступные посты обрабатываются, лента продолжает работать. Подробности — в /status.`,
-      });
   }
   async diagnostics() {
     const decisions = (
